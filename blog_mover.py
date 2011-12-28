@@ -21,6 +21,7 @@ import urllib2
 from BeautifulSoup import BeautifulSoup,Tag,CData
 import re
 import logging
+from datetime import date
 from datetime import datetime
 from datetime import timedelta
 import time
@@ -44,20 +45,25 @@ def replaceUnicodeNumbers(text):
     return rx.sub(one_xlat, text)
 
 def parseCommentDate(dateStr, postDate = datetime.today()):
-  """
-  Parse date string in comments
-  examples:
-    5 seconds ago
-    1 minute ago
-    4 hours ago
-    1 day ago
-    Nov. 6
-    Sept. 27
-  """
-  m = re.compile('^ - (\d+) (second|minute|hour|day)s? ago').match(dateStr) 
-  m2 = re.compile('^ - (\w+\.?) (\d+)(\, \d+ ?)?').match(dateStr) 
+  #"""
+  #Parse date string in comments
+  #examples:
+  #  刚刚
+  #  11分钟前
+  #  11小时前
+  #  昨天 11:11
+  #  前天 11:11
+  #  2011-11-11 11:11
+  #"""
+  secondsUStr = u':00'
+  secondsOfUnit = {u"刚刚":0, u"分钟前":60, u"小时前":60*60, u"昨天":24*60*60, u"前天":48*60*60}
+  reg_method = {u'\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}':lambda m:m.group(0)+secondsUStr,
+                u'(前天)( \d{1,2}:\d{1,2})': lambda m:date.today()-2 + m.group(2)+secondsUStr, 
+                u'(昨天)( \d{1,2}:\d{1,2})': lambda m:date.today()-1 + m.group(2)+secondsUStr,
+                u'(\d{1,2})(小时前)': lambda m: datetime.today()-1, 
+                u'':'', 
+                u'':''}
   if m :
-    secondsOfUnit = {"second":1, "minute":60, "hour":60*60, "day":24*60*60}
     num = int(m.group(1))
     unit = m.group(2)
     d = timedelta(seconds = num * secondsOfUnit[unit])
@@ -78,99 +84,7 @@ def testParseCommentDate():
   test_d_strs = ["5 seconds ago","1 minute ago","4 hours ago","1 day ago","Nov. 6", "Sept. 27"]
   for s in test_d_strs:
     print parseCommentDate(s)
-    
-        
-def fetchEntry(url,datetimePattern = '%m/%d/%Y %I:%M %p',mode='all'):
-    """
-    Structure of entry
-    entry
-    |-date
-    |-title
-    |-content
-    |-category
-    |-permalLink (permalLink of previous entry, may be NULL)
-    |-comments
-        |-email
-        |-author
-        |-comment
-        |-date
-    """
-    logging.debug("begin fetch page %s",url)
-    req = urllib2.Request(url)
-    req.add_header('User-Agent', 'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0')
-    page = urllib2.build_opener().open(req).read()
-    soup = BeautifulSoup(page)
-    logging.debug("fetch page successfully")
-    #logging.debug("Got Page Content\n---------------\n%s",soup.prettify())
-    i={'title':'','date':'','views':'','content':'','category':'','permalLink':'','comments':[]}
-    #find article
-    article = soup.find(id="article_details")
-    if article :
-        logging.debug("Found article")
-    else :
-        logging.debug("Can't found article")
-        sys.exit(2)
-    #title
-    temp = article.find(attrs={"class":"article_title"}).find(attrs={"class":"link_title"}).find('a')
-    if temp :
-        i['title']=temp.contents[0].string
-        logging.debug("found title %s",i['title'])
-    else :
-        logging.warning("Can't find title")
-        sys.exit(2)
-    #category / date / view times / comments times
-    manage = article.find(attrs={"class":"article_manage"})
-    #category
-    temp = manage.find(attrs={"class":"link_categories"}).find('a')
-    if temp :
-       i['category']=temp.contents[0].string
-       logging.debug("found category %s",i['category'])
-       global categories
-       categories.add(i['category'])
-    else:
-        logging.debug("No category")
-    #date
-    temp = manage.find(attrs={"class":"link_postdate"})
-    if temp :
-        i['date']=temp.contents[0].string + ":00"
-        logging.debug("found date %s",i['date'])
-    else :
-        logging.warning("Can't find date")
-        sys.exit(2)
-    #views
-    temp = manage.find(attrs={"class":"link_view"})
-    if temp :
-        i['views']=temp.contents[0][0:-3]
-        logging.debug("found views count %s",i['views'])
-    else :
-        logging.warning("Can't find views count")
-        sys.exit(2)
-    #comments time
-    temp = manage.find(attrs={"class":"link_comments"}).find('a')
-    if temp :
-        comments_cnt = temp.nextSibling[1:-1]
-        logging.debug("found comments count %s",comments_cnt)
-    else :
-        logging.warning("Can't find comments count")
-        sys.exit(2)
-    #content
-    temp = article.find(id="article_content") or article.find(attrs={"class":"article_content"})
-    if temp :
-        test1=map(CData,temp.contents)
-        i['content']=u''.join(test1)
-        logging.debug("found content");
-    else:
-        logging.warning("Can't find content")
-
-    
-    #previous entry link
-    temp = soup.find(id='ctl00_MainContentPlaceholder_ctl01_Toolbar_Internal_RightToolbarList');
-    if temp and temp.li :
-        for leftOrRightATag in temp.li.findAll('a') :
-            if leftOrRightATag.contents[0].find('Previous')>0 :
-                i['permalLink'] = temp.li.a['href']
-                logging.debug("found previous permalink %s",i['permalLink'])
-    #comments
+def fetchComments(comments, commentsCounts):
     try:
         if mode != 'postsOnly' :
             needFetchComments = True
@@ -204,7 +118,6 @@ def fetchEntry(url,datetimePattern = '%m/%d/%Y %I:%M %p',mode='all'):
             i['comments'].reverse() # bug reported by Sun Yue
             logging.debug('Got %d comments of this entry'
                       ,len(i['comments']))
-        return i
     except:
         logging.debug("===============Fetching Comments Error, Dump Variables================")
         logging.debug("-- cmDiv")
@@ -214,6 +127,99 @@ def fetchEntry(url,datetimePattern = '%m/%d/%Y %I:%M %p',mode='all'):
         logging.debug("======================================================================")
         logging.error("HTML parsing error, probably because of updating of live space, please email the log file to me: weiwei9@gmail.com")
         raise
+
+def fetchEntry(url,datetimePattern = '%Y-%m-%d %I:%M',mode='all'):
+    """
+    Structure of entry
+    entry
+    |-date
+    |-title
+    |-content
+    |-category
+    |-permalLink (permalLink of previous entry, may be NULL)
+    |-comments
+        |-email
+        |-author
+        |-comment
+        |-date
+    """
+    logging.debug("begin fetch page %s",url)
+    req = urllib2.Request(url)
+    req.add_header('User-Agent', 'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0')
+    page = urllib2.build_opener().open(req).read()
+    soup = BeautifulSoup(page)
+    logging.debug("fetch page successfully")
+    #logging.debug("Got Page Content\n---------------\n%s",soup.prettify())
+    i={'title':'','date':'','views':'','content':'','category':'','prevLink':'','comments':[]}
+    #find article
+    article = soup.find(id="article_details")
+    if article :
+        logging.debug("Found article")
+    else :
+        logging.debug("Can't found article")
+        sys.exit(2)
+    #title
+    temp = article.find(attrs={"class":"article_title"}).find(attrs={"class":"link_title"}).find('a')
+    if temp :
+        i['title']=temp.contents[0].string
+        logging.debug("found title %s",i['title'])
+    else :
+        logging.warning("Can't find title")
+        sys.exit(2)
+    #category / date / view times / comments times
+    manage = article.find(attrs={"class":"article_manage"})
+    #category
+    temp = manage.find(attrs={"class":"link_categories"}).find('a')
+    if temp :
+       i['category']=temp.contents[0].string
+       logging.debug("found category %s",i['category'])
+       global categories
+       categories.add(i['category'])
+    else:
+        logging.debug("No category")
+    #date
+    temp = manage.find(attrs={"class":"link_postdate"})
+    if temp :
+        i['date']=temp.contents[0].string
+        i['date'] = datetime.strptime(i['date'],datetimePattern)
+        logging.debug("found date %s",i['date'])
+    else :
+        logging.warning("Can't find date")
+        sys.exit(2)
+    #views
+    temp = manage.find(attrs={"class":"link_view"})
+    if temp :
+        i['views']=temp.contents[0][0:-3]
+        logging.debug("found views count %s",i['views'])
+    else :
+        logging.warning("Can't find views count")
+        sys.exit(2)
+    #comments time
+    temp = manage.find(attrs={"class":"link_comments"}).find('a')
+    if temp :
+        comments_cnt = temp.nextSibling[1:-1]
+        logging.debug("found comments count %s",comments_cnt)
+    else :
+        logging.warning("Can't find comments count")
+        sys.exit(2)
+    #content
+    temp = article.find(id="article_content") or article.find(attrs={"class":"article_content"})
+    if temp :
+        i['content']=u'<![CDATA['+u''.join(map(unicode,temp.contents))+u']]>'
+        logging.debug("found content");
+    else:
+        logging.warning("Can't find content")
+
+    
+    #previous entry link
+    temp = article.find('li',attrs={'class':'prev_article'}).find('a');
+    if temp:
+        i['prevLink'] = temp['href']
+        logging.debug("found previous permalink %s",i['prevLink'])
+    #comments
+
+    return i
+
     
 def getDstBlogEntryList(server, user, passw, maxPostID = 100):
     logging.info('Fetching dst blog entry list')
@@ -255,9 +261,9 @@ def find1stPermalink(srcURL):
     linkNode = soup.find(attrs={"class":"link_title"}).find('a')
     if linkNode :
         #Update @ 2007-10-21
-    	#if the permalink is like "/davelv/article/details/6191987" concat after "http://blog.csdn.net"
-    	linkNodeHref = req.get_type() + "://" + req.get_host() + linkNode["href"]
-	
+        #if the permalink is like "/davelv/article/details/6191987" concat after "http://blog.csdn.net"
+        linkNodeHref = req.get_type() + "://" + req.get_host() + linkNode["href"]
+    
         logging.info("Found 1st Permalink %s",linkNodeHref)
         return linkNodeHref;
     else :
@@ -285,40 +291,40 @@ def publishComments(entry,postCommentsURL,pID=0,dstBlogEntryDict={}):
 def exportHead(f,dic,categories=[]):
     t = Template(u"""<?xml version="1.0" encoding="UTF-8"?>
 <!--
-	This is a WordPress eXtended RSS file generated by Live Space Mover as an export of 
-	your blog. It contains information about your blog's posts, comments, and 
-	categories. You may use this file to transfer that content from one site to 
-	another. This file is not intended to serve as a complete backup of your 
-	blog.
-	
-	To import this information into a WordPress blog follow these steps:
-	
-	1.	Log into that blog as an administrator.
-	2.	Go to Manage > Import in the blog's admin.
-	3.	Choose "WordPress" from the list of importers.
-	4.	Upload this file using the form provided on that page.
-	5.	You will first be asked to map the authors in this export file to users 
-		on the blog. For each author, you may choose to map an existing user on 
-		the blog or to create a new user.
-	6.	WordPress will then import each of the posts, comments, and categories 
-		contained in this file onto your blog.
+    This is a WordPress eXtended RSS file generated by Live Space Mover as an export of 
+    your blog. It contains information about your blog's posts, comments, and 
+    categories. You may use this file to transfer that content from one site to 
+    another. This file is not intended to serve as a complete backup of your 
+    blog.
+    
+    To import this information into a WordPress blog follow these steps:
+    
+    1.  Log into that blog as an administrator.
+    2.  Go to Manage > Import in the blog's admin.
+    3.  Choose "WordPress" from the list of importers.
+    4.  Upload this file using the form provided on that page.
+    5.  You will first be asked to map the authors in this export file to users 
+        on the blog. For each author, you may choose to map an existing user on 
+        the blog or to create a new user.
+    6.  WordPress will then import each of the posts, comments, and categories 
+        contained in this file onto your blog.
 -->
 
 <!-- generator="Live Space Mover 1.0" created="${nowTime}"-->
 <rss version="2.0"
-	xmlns:content="http://purl.org/rss/1.0/modules/content/"
-	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
-	xmlns:dc="http://purl.org/dc/elements/1.1/"
-	xmlns:wp="http://wordpress.org/export/1.0/"
+    xmlns:content="http://purl.org/rss/1.0/modules/content/"
+    xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:wp="http://wordpress.org/export/1.0/"
 >
 
 <channel>
-	<title>${blogTitle}</title>
-	<link>${blogURL}</link>
-	<description></description>
-	<pubDate>Tue, 30 Nov 1999 00:00:00 +0000</pubDate>
-	<generator>Live Space Mover 1.0</generator>
-	<language>en</language>
+    <title>${blogTitle}</title>
+    <link>${blogURL}</link>
+    <description></description>
+    <pubDate>Tue, 30 Nov 1999 00:00:00 +0000</pubDate>
+    <generator>Live Space Mover 1.0</generator>
+    <language>en</language>
 """) #need blogTitle, nowTime, blogURL
     catT = Template(u'''<wp:category><wp:cat_name><![CDATA[${category}]]></wp:cat_name></wp:category>\n''')
     catStr = u''
@@ -348,7 +354,7 @@ def exportEntry(f,entry,user):
 <pubDate>${pubDate}</pubDate>
 <dc:creator>${entryAuthor}</dc:creator>
 
-		<category><![CDATA[${category}]]></category>
+        <category><![CDATA[${category}]]></category>
 
 <guid isPermaLink="false"></guid>
 <description></description>
@@ -404,14 +410,15 @@ def main():
     parser.add_option("-u","--user",action="store",type="string",dest="user",default="yourusername",help="username for logging into destination wordpress blog")
     parser.add_option("-p","--password",action="store",type="string",dest="passw",default="yourpassword",help="password for logging into destination wordpress blog")
     parser.add_option("-x","--proxy",action="store",type="string",dest="proxy",help="http proxy server, only for connecting live space.I don't know how to add proxy for metaWeblog yet. So this option is probably not useful...")
-    parser.add_option("-t","--datetimepattern",action="store",dest="datetimepattern",default="%m/%d/%Y %I:%M %p",help="The datetime pattern of livespace, default to be %m/%d/%Y %I:%M %p. Check http://docs.python.org/lib/module-time.html for time formatting codes. Make sure to quote the value in command line.")
+    parser.add_option("-t","--datetimepattern",action="store",dest="datetimepattern",default="%Y-%m-%d %I:%M",help="The datetime pattern of livespace, default to be %m/%d/%Y %I:%M %p. Check http://docs.python.org/lib/module-time.html for time formatting codes. Make sure to quote the value in command line.")
     parser.add_option("-b","--draft",action="store_false",dest="draft",default=True,help="as published posts or drafts after transfering,default to be published directly")
     parser.add_option("-l","--limit",action="store",type="int",dest="limit",help="limit number of transfered posts, you can use this option to test")
     parser.add_option("-m","--mode",action="store",type="string",dest="mode",default="all",help="Working mode, 'all' or 'commentsOnly'. Default is 'all'. Set it to 'commentsOnly' if you have used earlier version of this script to move posts. Set it to 'postsOnly' if you can't upload the comments-post page to your dest WordPress blog so can't move comments")
     parser.add_option("-c","--postcommentsurl",action="store",type="string",default='',dest="postCommentsURL",help="The URL for posting comments, usually should be the URL of 'my-wp-comments-post.php' provided with this script. If this option isn't set, program will use destURL and the default page name to decide.")    
     parser.add_option("-a","--maxDstEntryID",action="store",type="int",default='100',dest="maxDstEntryID",help="Use this parameter to specify the MAX post id of your destination blog")    
     (options, args) = parser.parse_args()
-
+    
+    
     #export all options variables
     for i in dir(options):
         exec i+" = options."+i
@@ -485,6 +492,7 @@ def main():
             startfromURL = entries[-1]['permalLink']
             logging.info("Will start fetching from %s",startfromURL)
     #connect src blog and find first permal link
+    srcURL="http://blog.csdn.net/davelv/"
     if startfromURL :
         permalink = startfromURL
         logging.info('Start fetching from %s',startfromURL)
@@ -580,3 +588,4 @@ if __name__=="__main__":
     except:
         logging.exception("Unexpected error")
         raise
+
