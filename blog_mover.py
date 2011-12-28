@@ -37,14 +37,14 @@ categories = set([])
 commentId = 10000
 entryId = 10000
 userAgent={'User-Agent':'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0'}
-
+csdnDatetimePattern = '%Y-%m-%d %H:%M';
 def replaceUnicodeNumbers(text):
     rx = re.compile('&#[0-9]+;')
     def one_xlat(match):
         return unichr(int(match.group(0)[2:-1]))
     return rx.sub(one_xlat, text)
 
-def parseCommentDate(dateStr, postDate = datetime.today()):
+def parseCommentDate(dateStr):
   #"""
   #Parse date string in comments
   #examples:
@@ -55,69 +55,59 @@ def parseCommentDate(dateStr, postDate = datetime.today()):
   #  前天 11:11
   #  2011-11-11 11:11
   #"""
-  secondsUStr = u':00'
-  secondsOfUnit = {u"刚刚":0, u"分钟前":60, u"小时前":60*60, u"昨天":24*60*60, u"前天":48*60*60}
-  reg_method = {u'\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}':lambda m:m.group(0)+secondsUStr,
-                u'(前天)( \d{1,2}:\d{1,2})': lambda m:date.today()-2 + m.group(2)+secondsUStr, 
-                u'(昨天)( \d{1,2}:\d{1,2})': lambda m:date.today()-1 + m.group(2)+secondsUStr,
-                u'(\d{1,2})(小时前)': lambda m: datetime.today()-1, 
-                u'':'', 
-                u'':''}
-  if m :
-    num = int(m.group(1))
-    unit = m.group(2)
-    d = timedelta(seconds = num * secondsOfUnit[unit])
-    return datetime.today() - d
-  elif m2 :
-    monthAbbr = m2.group(1)[0:3]
-    month = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,"Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}[monthAbbr]
-    day = int(m2.group(2))
-    if m2.group(3):
-      year = int(m2.group(3)[2:6])
-    else:
-      year = datetime.today().year
-    return datetime.today().replace(day=day, month=month, year=year)
-  else:
-    raise Exception, "Can't parse comment date string " + dateStr
+  datetimeNow = datetime.today()  
+  reg_method = {
+    '\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}':lambda m:datetime.strptime(m.group(0),csdnDatetimePattern),
+    '前天 (\d{1,2}):(\d{1,2})': lambda m:datetimeNow.replace(hour=int(m.group(1)), minute=int(m.group(2)))-timedelta(days=2), 
+    '昨天 (\d{1,2}):(\d{1,2})': lambda m:datetimeNow.replace(hour=int(m.group(1)), minute=int(m.group(2)))-timedelta(days=1),
+    '(\d{1,2})小时前': lambda m: datetimeNow-timedelta(hours=int(m.group(1))),
+    '(\d{1,2})分钟前': lambda m: datetimeNow-timedelta(minutes=int(m.group(1))), 
+    '刚刚': lambda m: datetimeNow }
+  for k,v in reg_method.items() :
+    m = re.search(k,dateStr)
+    if m :
+      return v(m)
+
+  raise Exception , "Can't parse comment date string " + dateStr
+
 
 def testParseCommentDate():
-  test_d_strs = ["5 seconds ago","1 minute ago","4 hours ago","1 day ago","Nov. 6", "Sept. 27"]
+  test_d_strs = ["5分钟前","刚刚","4小时前","昨天 12:09发表", "前天 01:18","2011-11-11 11:11", "2000-01-01 12:00"]
   for s in test_d_strs:
-    print parseCommentDate(s)
+    print s, parseCommentDate(s)
+
 def fetchComments(comments, commentsCounts):
     try:
-        if mode != 'postsOnly' :
-            needFetchComments = True
-            #maybe need to fetch several pages of comments
-            while needFetchComments:
-                temp = soup.findAll(attrs={"class":"cc2_cmt"})  #a comment div
-                if temp :
-                    for cmDiv in temp:
-                        comment = {'email':'','author':'','comment':'','date':'','url':''} #make sure every key is in
-                        #logging.debug('Comment Div content\n %s', cmDiv)
-                        #the name and email element. The first page is different from latter pages, latter ones have one more "span" element
-                        comment_author = cmDiv.find(attrs={"class":"cc2_dnmmain"}) # or cmDiv.find(attrs={"class":"ccName"})
-                        comment['author'] = replaceUnicodeNumbers(u''.join(comment_author.findAll(text=True)))
-                        comment['comment']=u''.join(map(CData,cmDiv.find(attrs={"class":"cc2_txt"}).contents))
-                        comment['date']=parseCommentDate(cmDiv.findNext(attrs={"class":"cc2_tsmain"}).string, i['date']).strftime("%Y-%m-%d %H:%M:%S")
-                        urlTag = cmDiv.find(attrs={"class":"cc2_dnmmain"})
-                        if urlTag:
-                           comment['url']=urlTag.find('a')['href']
-                        i['comments'].append(comment)
-                #fetch next page comments
-                #for first page, find this link
-                nextPageCommentATag = soup.find(id="sn_ccpgNextCommentControl")
-                if nextPageCommentATag :
-                  needFetchComments = True
-                  req = urllib2.Request(nextPageCommentATag["href"])
-                  req.add_header('User-agent', 'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.5) Gecko/20070713 Firefox/2.0.0.5')
-                  page = urllib2.build_opener().open(req).read()
-                  soup = BeautifulSoup(page)
-                else :
-                  needFetchComments = False
-            i['comments'].reverse() # bug reported by Sun Yue
-            logging.debug('Got %d comments of this entry'
-                      ,len(i['comments']))
+        #maybe need to fetch several pages of comments
+         while commentsCounts >0:
+		
+            temp = comments.findAll(attrs={"class":"cc2_cmt"})  #a comment div
+            if temp :
+                for cmDiv in temp:
+                    comment = {'email':'','author':'','comment':'','date':'','url':''} #make sure every key is in
+                    #logging.debug('Comment Div content\n %s', cmDiv)
+                    #the name and email element. The first page is different from latter pages, latter ones have one more "span" element
+                    comment_author = cmDiv.find(attrs={"class":"cc2_dnmmain"}) # or cmDiv.find(attrs={"class":"ccName"})
+                    comment['author'] = replaceUnicodeNumbers(u''.join(comment_author.findAll(text=True)))
+                    comment['comment']=u''.join(map(CData,cmDiv.find(attrs={"class":"cc2_txt"}).contents))
+                    comment['date']=parseCommentDate(cmDiv.findNext(attrs={"class":"cc2_tsmain"}).string, i['date']).strftime("%Y-%m-%d %H:%M:%S")
+                    urlTag = cmDiv.find(attrs={"class":"cc2_dnmmain"})
+                    if urlTag:
+                       comment['url']=urlTag.find('a')['href']
+                    i['comments'].append(comment)
+            #fetch next page comments
+            #for first page, find this link
+            nextPageCommentATag = soup.find(id="sn_ccpgNextCommentControl")
+            if nextPageCommentATag :
+                needFetchComments = True
+                req = urllib2.Request(nextPageCommentATag["href"])
+                req.add_header('User-agent', 'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.5) Gecko/20070713 Firefox/2.0.0.5')
+                page = urllib2.build_opener().open(req).read()
+                soup = BeautifulSoup(page)
+            else :
+                needFetchComments = False
+        i['comments'].reverse() # bug reported by Sun Yue
+        logging.debug('Got %d comments of this entry',len(i['comments']))
     except:
         logging.debug("===============Fetching Comments Error, Dump Variables================")
         logging.debug("-- cmDiv")
@@ -128,14 +118,17 @@ def fetchComments(comments, commentsCounts):
         logging.error("HTML parsing error, probably because of updating of live space, please email the log file to me: weiwei9@gmail.com")
         raise
 
-def fetchEntry(url,datetimePattern = '%Y-%m-%d %I:%M',mode='all'):
+def fetchEntry(url,datetimePattern = '%Y-%m-%d %H:%M',mode='all'):
     """
     Structure of entry
     entry
-    |-date
     |-title
+    |-manage
+    |   |-category (maybe NULL)
+    |   |-date
+    |   |-view' counts
+    |   |-comments' counts
     |-content
-    |-category
     |-permalLink (permalLink of previous entry, may be NULL)
     |-comments
         |-email
@@ -162,17 +155,17 @@ def fetchEntry(url,datetimePattern = '%Y-%m-%d %I:%M',mode='all'):
     temp = article.find(attrs={"class":"article_title"}).find(attrs={"class":"link_title"}).find('a')
     if temp :
         i['title']=temp.contents[0].string
-        logging.debug("found title %s",i['title'])
+        logging.debug("Found title %s",i['title'])
     else :
         logging.warning("Can't find title")
         sys.exit(2)
     #category / date / view times / comments times
     manage = article.find(attrs={"class":"article_manage"})
     #category
-    temp = manage.find(attrs={"class":"link_categories"}).find('a')
+    temp = manage.find(attrs={"class":"link_categories"})
     if temp :
-       i['category']=temp.contents[0].string
-       logging.debug("found category %s",i['category'])
+       i['category']=temp.find('a').contents[0].string
+       logging.debug("Found category %s",i['category'])
        global categories
        categories.add(i['category'])
     else:
@@ -182,46 +175,50 @@ def fetchEntry(url,datetimePattern = '%Y-%m-%d %I:%M',mode='all'):
     if temp :
         i['date']=temp.contents[0].string
         i['date'] = datetime.strptime(i['date'],datetimePattern)
-        logging.debug("found date %s",i['date'])
+        logging.debug("Found date %s",i['date'])
     else :
         logging.warning("Can't find date")
         sys.exit(2)
     #views
     temp = manage.find(attrs={"class":"link_view"})
     if temp :
-        i['views']=temp.contents[0][0:-3]
-        logging.debug("found views count %s",i['views'])
+        i['views']=int (temp.contents[0][0:-3])
+        logging.debug("Found views count %d",i['views'])
     else :
         logging.warning("Can't find views count")
         sys.exit(2)
-    #comments time
+    #comments count
     temp = manage.find(attrs={"class":"link_comments"}).find('a')
     if temp :
-        comments_cnt = temp.nextSibling[1:-1]
-        logging.debug("found comments count %s",comments_cnt)
+        comments_cnt = int (temp.nextSibling[1:-1])
+        logging.debug("Found comments count %d",comments_cnt)
     else :
         logging.warning("Can't find comments count")
         sys.exit(2)
     #content
     temp = article.find(id="article_content") or article.find(attrs={"class":"article_content"})
     if temp :
-        i['content']=u'<![CDATA['+u''.join(map(unicode,temp.contents))+u']]>'
-        logging.debug("found content");
+        i['content']=u''.join(map(unicode,temp.contents))
+        logging.debug("Found content");
     else:
         logging.warning("Can't find content")
-
     
     #previous entry link
-    temp = article.find('li',attrs={'class':'prev_article'}).find('a');
+    temp = article.find('li',attrs={'class':'prev_article'});
     if temp:
-        i['prevLink'] = temp['href']
-        logging.debug("found previous permalink %s",i['prevLink'])
+        i['prevLink'] = temp.find('a')['href']
+        logging.debug("Found previous permalink %s",i['prevLink'])
     #comments
-
+    if mode != 'postsOnly':
+	temp = soup.find(id="comment_list")
+	if temp:
+	    i['comments'] = fetchComments(temp, comments_cnt)
+	else: 
+	    logging.warning("Can't find conments")
     return i
 
     
-def getDstBlogEntryList(server, user, passw, maxPostID = 100):
+def getDstBlogEntryList(server, user, passw, maxPostID = 255):
     logging.info('Fetching dst blog entry list')
     pIdRange = range(1,maxPostID)
     entryDict = {}
@@ -361,7 +358,7 @@ def exportEntry(f,entry,user):
 <content:encoded><![CDATA[${entryContent}]]></content:encoded>
 <wp:post_id>${entryId}</wp:post_id>
 <wp:post_date>${postDate}</wp:post_date>
-<wp:post_date_gmt>0000-00-00 00:00:00</wp:post_date_gmt>
+<wp:post_date_gmt>${postDateGMT}</wp:post_date_gmt>
 <wp:comment_status>open</wp:comment_status>
 <wp:ping_status>open</wp:ping_status>
 <wp:post_name>${entryTitle}</wp:post_name>
@@ -386,9 +383,16 @@ ${comments}
         commentId-=1
         #logging.debug(comment['comment'])
     #logging.debug(entry['category'])
-    itemStr = itemT.substitute(entryTitle=saxutils.escape(entry['title']),
-        entryURL='',entryAuthor=user, category=entry['category'],entryContent=entry['content'],
-        entryId=entryId,postDate=entry['date'].strftime('%Y-%m-%d %H:%M:%S'),pubDate=entry['date'].strftime('%a, %d %b %Y %H:%M:%S +0000'),
+    itemStr = itemT.substitute(
+	entryTitle=saxutils.escape(entry['title']),
+        entryURL='',
+	entryAuthor=user,
+	category=entry['category'],
+	entryContent=entry['content'],
+        entryId=entryId,
+	postDate=entry['date'].strftime('%Y-%m-%d %H:%M:%S'),
+	postDateGMT=(entry['date']-timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
+	pubDate=entry['date'].strftime('%a, %d %b %Y %H:%M:%S +0800'),
         comments=commentsStr)
     entryId-=1
     #logging.debug(itemStr)
@@ -410,7 +414,7 @@ def main():
     parser.add_option("-u","--user",action="store",type="string",dest="user",default="yourusername",help="username for logging into destination wordpress blog")
     parser.add_option("-p","--password",action="store",type="string",dest="passw",default="yourpassword",help="password for logging into destination wordpress blog")
     parser.add_option("-x","--proxy",action="store",type="string",dest="proxy",help="http proxy server, only for connecting live space.I don't know how to add proxy for metaWeblog yet. So this option is probably not useful...")
-    parser.add_option("-t","--datetimepattern",action="store",dest="datetimepattern",default="%Y-%m-%d %I:%M",help="The datetime pattern of livespace, default to be %m/%d/%Y %I:%M %p. Check http://docs.python.org/lib/module-time.html for time formatting codes. Make sure to quote the value in command line.")
+    parser.add_option("-t","--datetimepattern",action="store",dest="datetimepattern",default="%Y-%m-%d %H:%M",help="The datetime pattern of livespace, default to be %Y/%m/%d %H:%M. Check http://docs.python.org/lib/module-time.html for time formatting codes. Make sure to quote the value in command line.")
     parser.add_option("-b","--draft",action="store_false",dest="draft",default=True,help="as published posts or drafts after transfering,default to be published directly")
     parser.add_option("-l","--limit",action="store",type="int",dest="limit",help="limit number of transfered posts, you can use this option to test")
     parser.add_option("-m","--mode",action="store",type="string",dest="mode",default="all",help="Working mode, 'all' or 'commentsOnly'. Default is 'all'. Set it to 'commentsOnly' if you have used earlier version of this script to move posts. Set it to 'postsOnly' if you can't upload the comments-post page to your dest WordPress blog so can't move comments")
@@ -492,7 +496,10 @@ def main():
             startfromURL = entries[-1]['permalLink']
             logging.info("Will start fetching from %s",startfromURL)
     #connect src blog and find first permal link
-    srcURL="http://blog.csdn.net/davelv/"
+    if srcURL :
+        pass
+    else :	
+        srcURL="http://blog.csdn.net/davelv/"
     if startfromURL :
         permalink = startfromURL
         logging.info('Start fetching from %s',startfromURL)
@@ -524,13 +531,15 @@ def main():
                     publishComments(entry=i,dstBlogEntryDict=dstBlogEntryDict,postCommentsURL=postCommentsURL)
                     
             entries.append(i)
-            pickle.dump(i,cacheFile)
+            #pickle.dump(i,cacheFile)
             logging.debug("-----------------------")
-            if 'permalLink' in i :
-                    permalink = i['permalLink']
+            if 'prevLink' in i :
+                    permalink = i['prevLink']
             else :
                     break
             count+=1
+            if count > 5:
+		break
             if limit and count >= limit : break
     finally:
         cacheFile.close()
@@ -545,9 +554,9 @@ def main():
         sys.exit(2)
     logging.info('Blog URL is %s',blogInfoDic['blogURL'])
     blogInfoDic['nowTime']=datetime.now().strftime('%Y-%m-%d %H:%M')
-    page = urllib2.urlopen(blogInfoDic['blogURL'])
+    page = urllib2.urlopen(urllib2.Request(blogInfoDic['blogURL'],headers=userAgent));
     soup = BeautifulSoup(page)
-    blogInfoDic['blogTitle']= replaceUnicodeNumbers(u'' + soup.find(id='navTitle').span.string)
+    blogInfoDic['blogTitle']= replaceUnicodeNumbers(u'' + soup.find(id='blog_title').h1.a.string)
     logging.debug('Blog Title is %s',blogInfoDic['blogTitle'])
     exportFileName = 'export_'+datetime.now().strftime('%m%d%Y-%H%M')+'.xml'
     f = codecs.open(exportFileName,'w','utf-8')
