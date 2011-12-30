@@ -54,30 +54,30 @@ def parseCommentDate(dateStr):
   #"""
   #Parse date string in comments
   #examples:
-  #..
-  #11...
-  #11...
-  #.. 11:11
-  #.. 11:11
-  #3.. 11:11
+  #刚刚
+  #11分钟前
+  #11小时前
+  #昨天 11:11
+  #前天 11:11
+  #3天前 11:11
   #2011-11-11 11:11
   #"""
   datetimeNow = datetime.today()  
   reg_method = {
     u'\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}':lambda m:datetime.strptime(m.group(0), csdnDatetimePattern),
-    u'(\d).. (\d{1,2}):(\d{1,2})': lambda m: datetimeNow.replace(hour=int(m.group(2)), minute=int(m.group(3))) - timedelta(days=int(m.group(1))),
-    u'.. (\d{1,2}):(\d{1,2})': lambda m:datetimeNow.replace(hour=int(m.group(1)), minute=int(m.group(2))) - timedelta(days=2),
-    u'.. (\d{1,2}):(\d{1,2})': lambda m:datetimeNow.replace(hour=int(m.group(1)), minute=int(m.group(2))) - timedelta(days=1),
-    u'(\d{1,2})...': lambda m: datetimeNow - timedelta(hours=int(m.group(1))),
-    u'(\d{1,2})...': lambda m: datetimeNow - timedelta(minutes=int(m.group(1))),
-    u'..': lambda m: datetimeNow }
+    u'(\d)天前 (\d{1,2}):(\d{1,2})': lambda m: datetimeNow.replace(hour=int(m.group(2)), minute=int(m.group(3))) - timedelta(days=int(m.group(1))),
+    u'前天 (\d{1,2}):(\d{1,2})': lambda m:datetimeNow.replace(hour=int(m.group(1)), minute=int(m.group(2))) - timedelta(days=2),
+    u'昨天 (\d{1,2}):(\d{1,2})': lambda m:datetimeNow.replace(hour=int(m.group(1)), minute=int(m.group(2))) - timedelta(days=1),
+    u'(\d{1,2})小时前': lambda m: datetimeNow - timedelta(hours=int(m.group(1))),
+    u'(\d{1,2})分钟前': lambda m: datetimeNow - timedelta(minutes=int(m.group(1))),
+    u'刚刚': lambda m: datetimeNow }
   for k, v in reg_method.items() :
     m = re.search(k, dateStr)
     if m :
       return v(m)
 
 def testParseCommentDate():
-  test_d_strs = [u"5...", u"..", u"4...", u".. 12:09..", u".. 01:18", u"2011-11-11 11:11", u"2000-01-01 12:00"]
+  test_d_strs = [u"5分钟前", u"刚刚", u"4小时前", u"昨天 12:09发表", u"前天 01:18", u"2011-11-11 11:11", u"2000-01-01 12:00"]
   for s in test_d_strs:
     print s, parseCommentDate(s)
 
@@ -181,8 +181,9 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     req = urllib2.Request(commentsURL, headers=userAgent)  
     #OMG, when I write out the parse functon by using regex
     #I found it can be solved by json ulity in one line!!! 
-    #{"list":[{"ArticleId":7079224,"BlogId":66847,"CommentId":2065153,"Content":"XXXX","ParentId":0,"PostTime":".. 11:26","Replies":null,"UserName":"evilhacker","Userface":"http://xxx.jpg"},...],...}
+    #{"list":[{"ArticleId":7079224,"BlogId":66847,"CommentId":2065153,"Content":"XXXX","ParentId":0,"PostTime":"昨天 11:26","Replies":null,"UserName":"evilhacker","Userface":"http://xxx.jpg"},...],...}
     i['comments'] = json.load(urllib2.urlopen(req))['list']
+
     if i['comments'] == None:
         logging.warning("Can't find conments")
     for v in i['comments']:
@@ -510,9 +511,9 @@ def main():
             #pickle.dump(i,cacheFile)
             logging.debug("-----------------------")
             if 'prevLink' in i :
-                    permalink = i['prevLink']
+                permalink = i['prevLink']
             else :
-                    break
+                break
             count += 1
             if count > 5:
                 break
