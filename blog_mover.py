@@ -13,7 +13,7 @@ General Public License: http://www.gnu.org/copyleft/gpl.html
 """
 
 __VERSION__ = "1.0"
-
+__PROGRAM__ = "CsdnBlogMover"
 import sys
 import os
 import codecs
@@ -35,13 +35,12 @@ from xml.sax import saxutils
 import string
 import json
 
+commentIdList = {}
 entries = []
 categories = set([])
-commentId = 10000
-entryId = 10000
-userAgent = {'User-Agent':'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0'}
-csdnDatetimePattern = '%Y-%m-%d %H:%M';
-csdnHost = 'http://blog.csdn.net/'
+userAgent = {u'User-Agent':u'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0'}
+csdnDatetimePattern = u'%Y-%m-%d %H:%M';
+csdnHost = u'http://blog.csdn.net/'
 csdnCommentsPre = ''
 
 def replaceUnicodeNumbers(text):
@@ -49,7 +48,19 @@ def replaceUnicodeNumbers(text):
     def one_xlat(match):
         return unichr(int(match.group(0)[2:-1]))
     return rx.sub(one_xlat, text)
-
+def prettyCode(content):
+    """
+    Pretty code area in article content use pre to replace textarea
+    working...
+    """
+    textarea = re.compile(u'<textarea.+name="code".+class="([^"]+)">()')
+    return content
+def prettyComment(comment):
+    quote = re.compile(u'^\[quote=([^\]]+)\](.+)\[/quote\]', re.S)
+    comment = quote.sub(u'引用 \g<1>:\n\g<2>', comment)
+    reply = re.compile(u'\[reply\]([^\[]+)\[/reply\]')
+    return reply.sub(u'回复 \g<1>:', comment)
+        
 def parseCommentDate(dateStr):
   #"""
   #Parse date string in comments
@@ -102,13 +113,13 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     """
     logging.debug("begin fetch page %s", url)
     temp = url.split('/')
-    articleID=temp[len(temp)-1]
+    articleID = temp[len(temp) - 1]
     req = urllib2.Request(url, headers=userAgent)    
     page = urllib2.urlopen(req)
     soup = BeautifulSoup(page)
     logging.debug("fetch page successfully")
     #logging.debug("Got Page Content\n---------------\n%s",soup.prettify())
-    i = {'title':'', 'date':'', 'views':'', 'content':'', 'category':'', 'prevLink':'', 'comments':[]}
+    i = {'title':'', 'date':'', 'views':'', 'content':'', 'category':[], 'prevLink':'', 'id':articleID, 'comments':[]}
     #find article
     article = soup.find(id="article_details")
     if article :
@@ -119,7 +130,7 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #title
     temp = article.find(attrs={"class":"article_title"}).find(attrs={"class":"link_title"}).find('a')
     if temp :
-        i['title'] = temp.contents[0].string
+        i['title'] = u'' + temp.contents[0].string
         logging.debug("Found title %s", i['title'])
     else :
         logging.warning("Can't find title")
@@ -129,16 +140,16 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #category
     temp = manage.find(attrs={"class":"link_categories"})
     if temp :
-       i['category'] = temp.find('a').contents[0].string
+       i['category'] = map(lambda a: a.text, temp.findAll('a'))
        logging.debug("Found category %s", i['category'])
        global categories
-       categories.add(i['category'])
+       categories.update(i['category'])
     else:
-        logging.debug("No category")
+        logging.debug("No category, use default")
     #date
     temp = manage.find(attrs={"class":"link_postdate"})
     if temp :
-        i['date'] = temp.contents[0].string
+        i['date'] = u'' + temp.contents[0].string
         i['date'] = datetime.strptime(i['date'], datetimePattern)
         logging.debug("Found date %s", i['date'])
     else :
@@ -172,12 +183,12 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #previous entry link
     temp = article.find('li', attrs={'class':'prev_article'});
     if temp:
-        i['prevLink'] = temp.find('a')['href']
+        i['prevLink'] = u'' + temp.find('a')['href']
         logging.debug("Found previous permalink %s", i['prevLink'])
     #comments get from server
     if mode == 'postsOnly' or comments_cnt == 0:
         return i
-    commentsURL = csdnCommentsPre+articleID
+    commentsURL = csdnCommentsPre + articleID
     req = urllib2.Request(commentsURL, headers=userAgent)  
     #OMG, when I write out the parse functon by using regex
     #I found it can be solved by json ulity in one line!!! 
@@ -188,6 +199,7 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
         logging.warning("Can't find conments")
     for v in i['comments']:
         v['PostTime'] = parseCommentDate(v['PostTime'])
+        v['Content'] = prettyComment(v['Content'])
    
     
     return i
@@ -230,13 +242,12 @@ def find1stPermalink(srcURL):
     page = urllib2.urlopen(req)
     logging.info("connect successfully, look for 1st Permalink")
     soup = BeautifulSoup(page)
-    global csdnCommentsPre 
-    csdnCommentsPre = re.search(csdnHost+"\w+", srcURL).group(0)+"/comment/list/"
+    print csdnCommentsPre
     linkNode = soup.find(attrs={"class":"link_title"}).find('a')
     if linkNode :
         #Update @ 2007-10-21
         #if the permalink is like "/davelv/article/details/6191987" concat after "http://blog.csdn.net"
-        linkNodeHref = csdnHost + linkNode["href"]
+        linkNodeHref = csdnHost + linkNode["href"][1:]
     
         logging.info("Found 1st Permalink %s", linkNodeHref)
         return linkNodeHref;
@@ -284,7 +295,7 @@ def exportHead(f, dic, categories=[]):
         contained in this file onto your blog.
 -->
 
-<!-- generator="Live Space Mover 1.0" created="${nowTime}"-->
+<!-- generator="{programInfo}" created="${nowTime}"-->
 <rss version="2.0"
     xmlns:content="http://purl.org/rss/1.0/modules/content/"
     xmlns:wfw="http://wellformedweb.org/CommentAPI/"
@@ -295,83 +306,102 @@ def exportHead(f, dic, categories=[]):
 <channel>
     <title>${blogTitle}</title>
     <link>${blogURL}</link>
-    <description></description>
-    <pubDate>Tue, 30 Nov 1999 00:00:00 +0000</pubDate>
-    <generator>Live Space Mover 1.0</generator>
-    <language>en</language>
-""") #need blogTitle, nowTime, blogURL
-    catT = Template(u'''<wp:category><wp:cat_name><![CDATA[${category}]]></wp:cat_name></wp:category>\n''')
+    <description>${blogDesc}</description>
+    <pubDate>${nowTime}</pubDate>
+    <generator>${programInfo}</generator>
+    <language>zh</language>
+    <wp:wxr_version>1.1</wp:wxr_version>""") #need blogTitle, nowTime, blogURL
+    catT = Template(u'''
+    <wp:category><wp:term_id>${categoryId}</wp:term_id><wp:category_nicename>${niceName}</wp:category_nicename><wp:category_parent/><wp:cat_name><![CDATA[${category}]]></wp:cat_name></wp:category>
+    <wp:tag><wp:term_id>${tagId}</wp:term_id><wp:tag_slug>${niceName}</wp:tag_slug><wp:tag_name><![CDATA[${category}]]></wp:tag_name></wp:tag>''')
     catStr = u''
-    for cat in categories:
-        catStr += catT.substitute(category=cat)
+    i = -1
+    for cat  in categories:
+        i = i + 2
+        logging.debug("Cate:%s", cat)
+        catStr += catT.substitute(
+        categoryId=i,
+        tagId=i + 1,
+        category=cat,
+        niceName=urllib2.quote(cat.encode('utf-8'))
+        )
     dic['blogTitle'] = saxutils.escape(dic['blogTitle'])
+    dic['programInfo'] = u'' + __PROGRAM__ + __VERSION__
     f.write(t.substitute(dic))
     f.write(catStr)
-    
+ 
 def exportEntry(f, entry, user):
-    commentT = Template(u"""<wp:comment>
-<wp:comment_id>${commentId}</wp:comment_id>
-<wp:comment_author>${commentAuthor}</wp:comment_author>
-<wp:comment_author_email>${commentEmail}</wp:comment_author_email>
-<wp:comment_author_url>${commentURL}</wp:comment_author_url>
-<wp:comment_author_IP></wp:comment_author_IP>
-<wp:comment_date>${commentDate}</wp:comment_date>
-<wp:comment_date_gmt>0000-00-00 00:00:00</wp:comment_date_gmt>
-<wp:comment_content>${commentContent}</wp:comment_content>
-<wp:comment_approved>1</wp:comment_approved>
-<wp:comment_type></wp:comment_type>
-<wp:comment_parent>0</wp:comment_parent>
-</wp:comment>""") #need commentId, commentAuthor, commentEmail, commentURL,commentDate,commentContent
-    itemT = Template(u"""<item>
-<title>${entryTitle}</title>
-<link>${entryURL}</link>
-<pubDate>${pubDate}</pubDate>
-<dc:creator>${entryAuthor}</dc:creator>
+    commentT = Template(u"""
+        <wp:comment>
+            <wp:comment_id>${commentId}</wp:comment_id>
+            <wp:comment_author><![CDATA[${commentAuthor}]]></wp:comment_author>
+            <wp:comment_author_email></wp:comment_author_email>
+            <wp:comment_author_url>${authorURL}</wp:comment_author_url>
+            <wp:comment_author_IP></wp:comment_author_IP>
+            <wp:comment_date>${commentDate}</wp:comment_date>
+            <wp:comment_date_gmt>${commentDateGMT}</wp:comment_date_gmt>
+            <wp:comment_content><![CDATA[${commentContent}]]></wp:comment_content>
+            <wp:comment_approved>1</wp:comment_approved>
+            <wp:comment_type></wp:comment_type>
+            <wp:comment_parent>${parentId}</wp:comment_parent>
+        </wp:comment>""") #need commentId, commentAuthor, commentEmail, commentURL,commentDate,commentContent
+    itemT = Template(u"""
+    <item>
+        <title>${entryTitle}</title>
+        <link>${entryURL}</link>
+        <pubDate>${pubDate}</pubDate>
+        <dc:creator>${entryAuthor}</dc:creator>
+        ${categories}
+        <guid isPermaLink="false"></guid>
+        <description></description>
+        <content:encoded><![CDATA[${entryContent}]]></content:encoded>
+        <wp:post_id>${entryId}</wp:post_id>
+        <wp:post_date>${postDate}</wp:post_date>
+        <wp:post_date_gmt>${postDateGMT}</wp:post_date_gmt>
+        <wp:comment_status>open</wp:comment_status>
+        <wp:ping_status>open</wp:ping_status>
+        <wp:post_name>${postName}</wp:post_name>
+        <wp:status>publish</wp:status>
+        <wp:post_parent>0</wp:post_parent>
+        <wp:menu_order>0</wp:menu_order>
+        <wp:post_type>post</wp:post_type>
+        ${comments}
+    </item>""") #need entryTitle, entryURL, entryAuthor, category, entryContent, entryId, postDate, pubDate
+    cateT = Template(u"""
+        <category domain="category" nicename="${niceName}"><![CDATA[${category}]]></category>
+        <category domain="post_tag" nicename="${niceName}"><![CDATA[${category}]]></category>""")#nedd category niceName
 
-        <category><![CDATA[${category}]]></category>
-
-<guid isPermaLink="false"></guid>
-<description></description>
-<content:encoded><![CDATA[${entryContent}]]></content:encoded>
-<wp:post_id>${entryId}</wp:post_id>
-<wp:post_date>${postDate}</wp:post_date>
-<wp:post_date_gmt>${postDateGMT}</wp:post_date_gmt>
-<wp:comment_status>open</wp:comment_status>
-<wp:ping_status>open</wp:ping_status>
-<wp:post_name>${entryTitle}</wp:post_name>
-<wp:status>publish</wp:status>
-<wp:post_parent>0</wp:post_parent>
-<wp:menu_order>0</wp:menu_order>
-<wp:post_type>post</wp:post_type>
-${comments}
-</item>
-""") #need entryTitle, entryURL, entryAuthor, category, entryContent, entryId, postDate, pubDate
-    global entryId
-    global commentId
     commentsStr = u""
     #logging.debug(entry)
     for comment in entry['comments']:
-        commentsStr += commentT.substitute(commentId=commentId,
-            commentAuthor=saxutils.escape(comment['author']),
-            commentEmail=saxutils.escape(comment['email']),
-            commentURL=comment['url'],
-            commentDate=comment['date'],
-            commentContent=comment['comment'])
-        commentId -= 1
+        commentsStr += commentT.substitute(
+        commentId=comment['CommentId'],
+            commentAuthor=saxutils.escape(comment['UserName']),
+            authorURL=csdnHost + saxutils.escape(comment['UserName']),
+            commentDate=comment['PostTime'].strftime('%Y-%m-%d %H:%M:%S'),
+        commentDateGMT=(comment['PostTime'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
+            commentContent=comment['Content'],
+        parentId=comment['ParentId'])
         #logging.debug(comment['comment'])
+    #category
+    categoryStr = u''
+    for cate in entry['category'] :
+        categoryStr += cateT.substitute(
+            category=cate,
+        niceName=urllib2.quote(cate.encode('utf-8')))
     #logging.debug(entry['category'])
     itemStr = itemT.substitute(
     entryTitle=saxutils.escape(entry['title']),
         entryURL='',
-    entryAuthor=user,
-    category=entry['category'],
-    entryContent=entry['content'],
-        entryId=entryId,
-    postDate=entry['date'].strftime('%Y-%m-%d %H:%M:%S'),
-    postDateGMT=(entry['date'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
-    pubDate=entry['date'].strftime('%a, %d %b %Y %H:%M:%S +0800'),
-        comments=commentsStr)
-    entryId -= 1
+        entryAuthor=user,
+        entryContent=entry['content'],
+    postName=urllib2.quote(entry['title'].encode('utf-8')),
+        entryId=entry['id'],
+        postDate=entry['date'].strftime('%Y-%m-%d %H:%M:%S'),
+        postDateGMT=(entry['date'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
+        pubDate=entry['date'].strftime('%a, %d %b %Y %H:%M:%S +0800'),
+        comments=commentsStr,
+    categories=categoryStr)
     #logging.debug(itemStr)
     f.write(itemStr)
     
@@ -473,10 +503,7 @@ def main():
             startfromURL = entries[-1]['permalLink']
             logging.info("Will start fetching from %s", startfromURL)
     #connect src blog and find first permal link
-    if srcURL :
-        pass
-    else :    
-        srcURL = "http://blog.csdn.net/davelv/"
+    srcURL = "http://blog.csdn.net/davelv"
     if startfromURL :
         permalink = startfromURL
         logging.info('Start fetching from %s', startfromURL)
@@ -485,6 +512,8 @@ def main():
     else:
         logging.error("Error, you must give either srcURL or startfromURL")
         sys.exit(2)
+    global csdnCommentsPre 
+    csdnCommentsPre = re.search("http://blog\.csdn\.net/[^/]+", permalink).group(0) + "/comment/list/"
     #main loop, retrieve every blog entry and post to dest blog
     count = 0
     if not cacheFile:
@@ -515,8 +544,7 @@ def main():
             else :
                 break
             count += 1
-            if count > 5:
-                break
+            limit = 10
             if limit and count >= limit : break
     finally:
         cacheFile.close()
@@ -530,10 +558,11 @@ def main():
         logging.error("Error, you must give either srcURL or startfromURL")
         sys.exit(2)
     logging.info('Blog URL is %s', blogInfoDic['blogURL'])
-    blogInfoDic['nowTime'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    blogInfoDic['nowTime'] = datetime.now().strftime('%a, %d %b %Y %H:%M:%S +0800')
     page = urllib2.urlopen(urllib2.Request(blogInfoDic['blogURL'], headers=userAgent));
     soup = BeautifulSoup(page)
-    blogInfoDic['blogTitle'] = replaceUnicodeNumbers(u'' + soup.find(id='blog_title').h1.a.string)
+    blogInfoDic['blogTitle'] = u'' + soup.find(id='blog_title').h1.text
+    blogInfoDic['blogDesc'] = u'' + soup.find(id='blog_title').h2.text
     logging.debug('Blog Title is %s', blogInfoDic['blogTitle'])
     exportFileName = 'export_' + datetime.now().strftime('%m%d%Y-%H%M') + '.xml'
     f = codecs.open(exportFileName, 'w', 'utf-8')
@@ -544,6 +573,7 @@ def main():
         sys.exit(2)
     exportHead(f, blogInfoDic, categories)
     logging.debug('Exported header')
+    user = u'davelv';
     #export entries
     for entry in entries:
         exportEntry(f, entry, user)
@@ -557,10 +587,10 @@ def main():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
-                    format='LINE %(lineno)-4d  %(levelname)-8s %(message)s',
-                    datefmt='%m-%d %H:%M',
-                    filename='blog-mover.log',
-                    filemode='w');
+        format='LINE %(lineno)-4d  %(levelname)-8s %(message)s',
+        datefmt='%m-%d %H:%M',
+        filename='blog_mover.log',
+        filemode='w');
     # define a Handler which writes INFO messages or higher to the sys.stderr
     console = logging.StreamHandler()
     console.setLevel(logging.DEBUG)
@@ -574,4 +604,5 @@ if __name__ == "__main__":
     except:
         logging.exception("Unexpected error")
         raise
+
 
