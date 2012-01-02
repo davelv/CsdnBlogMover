@@ -1,5 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+
 """
 This script copies entries from a CSDN blog to an other weblog, using the MetaWeblog API.
 It can move both posts and comments.
@@ -9,7 +10,7 @@ Thanks for ordinary author Wei Wei(live space mover)
 (C) Davelv, homepage http://www.davelv.net
 (C) Wei Wei,homepage: http://www.broom9.com
 General Public License: http://www.gnu.org/copyleft/gpl.html
-
+Last modified 2012-01-02 08:21
 """
 
 __VERSION__ = "1.0"
@@ -17,51 +18,62 @@ __PROGRAM__ = "CsdnBlogMover"
 import sys
 import os
 import codecs
-import xmlrpclib
-import urllib
+import httplib
 import urllib2
-from BeautifulSoup import BeautifulSoup, Tag, CData
+from BeautifulSoup import BeautifulSoup
 import re
 import logging
-from datetime import date
-from datetime import datetime
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 import time
 from optparse import OptionParser
 from string import Template
 import pickle
-import xml
 from xml.sax import saxutils
-import string
 import json
 
 commentIdList = {}
-entries = []
 categories = set([])
-userAgent = {u'User-Agent':u'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0'}
-csdnDatetimePattern = u'%Y-%m-%d %H:%M';
-csdnHost = u'http://blog.csdn.net/'
-csdnCommentsPre = ''
 
-def replaceUnicodeNumbers(text):
-    rx = re.compile('&#[0-9]+;')
-    def one_xlat(match):
-        return unichr(int(match.group(0)[2:-1]))
-    return rx.sub(one_xlat, text)
-def prettyCode(content):
+csdnDatetimePattern = u'%Y-%m-%d %H:%M';
+csdnHost = u'blog.csdn.net'
+csdnCommentsPre = u''
+http = httplib.HTTPConnection(csdnHost)
+
+    
+def GetPage(url, retryTimes=5, retryIntvl=3):
+    global http
+    userAgent = {u'User-Agent':u'Mozilla/5.0 (X11; Linux i686; rv:8.0) Gecko/20100101 Firefox/8.0',
+                 u'Connection': u'keep-alive'}
+    while retryTimes>0:
+        try:
+            http.request("GET", url, headers=userAgent)
+            return http.getresponse()
+        except httplib.CannotSendRequest:
+            logging.warning("Fetch data failure, reconnect after %ds", retryIntvl)
+            http.close()
+        except:
+            logging.warning("Fetch data failure, retry after %ds", retryIntvl)
+        finally:
+            retryTimes -=1
+            if retryTimes == 0:
+                raise
+            time.sleep(retryIntvl)
+
+        
+def PrettyCode(content):
     """
     Pretty code area in article content use pre to replace textarea
     working...
     """
-    textarea = re.compile(u'<textarea.+name="code".+class="([^"]+)">()')
-    return content
-def prettyComment(comment):
+    textarea = re.compile(u'<textarea.+?name="code".+?class="([^"]+)">(.+?)</textarea>', re.S)
+    return  textarea.sub(u'<pre class="\g<1>">\g<2></pre>', content)
+def PrettyComment(comment):
     quote = re.compile(u'^\[quote=([^\]]+)\](.+)\[/quote\]', re.S)
-    comment = quote.sub(u'引用 \g<1>:\n\g<2>', comment)
+    comment = quote.sub(u'<fieldset><legend>引用 \g<1>:</legend>\g<2></fieldset>', comment)
     reply = re.compile(u'\[reply\]([^\[]+)\[/reply\]')
     return reply.sub(u'回复 \g<1>:', comment)
         
-def parseCommentDate(dateStr):
+def ParseCommentDate(dateStr):
   #"""
   #Parse date string in comments
   #examples:
@@ -87,13 +99,7 @@ def parseCommentDate(dateStr):
     if m :
       return v(m)
 
-def testParseCommentDate():
-  test_d_strs = [u"5分钟前", u"刚刚", u"4小时前", u"昨天 12:09发表", u"前天 01:18", u"2011-11-11 11:11", u"2000-01-01 12:00"]
-  for s in test_d_strs:
-    print s, parseCommentDate(s)
-
-
-def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
+def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
     """
     Structure of entry
     entry
@@ -111,15 +117,11 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
         |-comment
         |-date
     """
-    logging.debug("begin fetch page %s", url)
     temp = url.split('/')
-    articleID = temp[len(temp) - 1]
-    req = urllib2.Request(url, headers=userAgent)    
-    page = urllib2.urlopen(req)
-    soup = BeautifulSoup(page)
-    logging.debug("fetch page successfully")
-    #logging.debug("Got Page Content\n---------------\n%s",soup.prettify())
-    i = {'title':'', 'date':'', 'views':'', 'content':'', 'category':[], 'prevLink':'', 'id':articleID, 'comments':[]}
+    articleID = temp[-1]
+    logging.debug("Fetch article page from %s",url)
+    soup = BeautifulSoup(GetPage(url))    #logging.debug("Got Page Content\n---------------\n%s",soup.prettify())
+    item = {'title':'', 'date':'', 'views':'', 'content':'', 'category':[], 'prevLink':'', 'id':articleID, 'comments':[]}
     #find article
     article = soup.find(id="article_details")
     if article :
@@ -130,8 +132,8 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #title
     temp = article.find(attrs={"class":"article_title"}).find(attrs={"class":"link_title"}).find('a')
     if temp :
-        i['title'] = u'' + temp.contents[0].string
-        logging.debug("Found title %s", i['title'])
+        item['title'] = u'' + temp.contents[0].string
+        logging.debug("Found title %s", item['title'])
     else :
         logging.warning("Can't find title")
         sys.exit(2)
@@ -140,26 +142,28 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #category
     temp = manage.find(attrs={"class":"link_categories"})
     if temp :
-       i['category'] = map(lambda a: a.text, temp.findAll('a'))
-       logging.debug("Found category %s", i['category'])
+       item['category'] = map(lambda a: u''+a.text, temp.findAll('a'))
+       categoryStr = u''
+       for cate in item['category'] : categoryStr+=cate+u', '
+       logging.debug("Found category %s",categoryStr[:-2])
        global categories
-       categories.update(i['category'])
+       categories.update(item['category'])
     else:
         logging.debug("No category, use default")
     #date
     temp = manage.find(attrs={"class":"link_postdate"})
     if temp :
-        i['date'] = u'' + temp.contents[0].string
-        i['date'] = datetime.strptime(i['date'], datetimePattern)
-        logging.debug("Found date %s", i['date'])
+        item['date'] = u'' + temp.contents[0].string
+        item['date'] = datetime.strptime(item['date'], datetimePattern)
+        logging.debug("Found date %s", item['date'])
     else :
         logging.warning("Can't find date")
         sys.exit(2)
     #views
     temp = manage.find(attrs={"class":"link_view"})
     if temp :
-        i['views'] = int (temp.contents[0][0:-3])
-        logging.debug("Found views count %d", i['views'])
+        item['views'] = int (temp.contents[0][0:-3])
+        logging.debug("Found views count %d", item['views'])
     else :
         logging.warning("Can't find views count")
         sys.exit(2)
@@ -175,7 +179,7 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #content
     temp = article.find(id="article_content") or article.find(attrs={"class":"article_content"})
     if temp :
-        i['content'] = u''.join(map(unicode, temp.contents))
+        item['content'] = PrettyCode(u''.join(map(unicode, temp.contents)))
         logging.debug("Found content");
     else:
         logging.warning("Can't find content")
@@ -183,97 +187,57 @@ def fetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', mode='all'):
     #previous entry link
     temp = article.find('li', attrs={'class':'prev_article'});
     if temp:
-        i['prevLink'] = u'' + temp.find('a')['href']
-        logging.debug("Found previous permalink %s", i['prevLink'])
+        item['prevLink'] = u'' + temp.find('a')['href']
+        logging.debug("Found previous permaLink %s", item['prevLink'])
     #comments get from server
-    if mode == 'postsOnly' or comments_cnt == 0:
-        return i
+    if postOnly or comments_cnt == 0:
+        return item
     commentsURL = csdnCommentsPre + articleID
-    req = urllib2.Request(commentsURL, headers=userAgent)  
+    logging.debug("Fetch comments from %s", commentsURL)
+    page = GetPage(commentsURL) 
     #OMG, when I write out the parse functon by using regex
     #I found it can be solved by json ulity in one line!!! 
     #{"list":[{"ArticleId":7079224,"BlogId":66847,"CommentId":2065153,"Content":"XXXX","ParentId":0,"PostTime":"昨天 11:26","Replies":null,"UserName":"evilhacker","Userface":"http://xxx.jpg"},...],...}
-    i['comments'] = json.load(urllib2.urlopen(req))['list']
+    item['comments'] = json.load(page)['list']
 
-    if i['comments'] == None:
+
+    if item['comments'] == None:
         logging.warning("Can't find conments")
-    for v in i['comments']:
-        v['PostTime'] = parseCommentDate(v['PostTime'])
-        v['Content'] = prettyComment(v['Content'])
-   
-    
-    return i
+    for v in item['comments']:
+        uselessPriorities = ['ArticleId','BlogId','Replies', 'Userface']
+        for i in uselessPriorities: del v[i]
+        v['PostTime'] = ParseCommentDate(v['PostTime'])
+        v['Content'] = PrettyComment(v['Content'])
+        
+    return item
 
+def FetchBlogInfo(url ,needPermaLink = True):
+    global csdnCommentsPre
+    blogInfo = {}
+    logging.info("connectiong to web page %s", url)
+    soup = BeautifulSoup(GetPage(url))
+    blogInfo['user'] = u''+re.search(csdnHost+"/([^/]+)", url).group(1)
+    blogInfo['blogURL'] = u'http://'+csdnHost+'/'+blogInfo['user']+'/'
+    csdnCommentsPre = blogInfo['blogURL']+ "comment/list/"
+    logging.info('Blog URL is %s', blogInfo['blogURL'])
+    blogInfo['nowTime'] = u'' + datetime.now().strftime('%a, %d %b %Y %H:%M:%S +0800')
+    blogInfo['blogTitle'] = u'' + soup.find(id='blog_title').h1.text
+    blogInfo['blogDesc'] = u'' + soup.find(id='blog_title').h2.text
+    logging.debug('Blog Title is %s', blogInfo['blogTitle'])
     
-def getDstBlogEntryList(server, user, passw, maxPostID=255):
-    logging.info('Fetching dst blog entry list')
-    pIdRange = range(1, maxPostID)
-    entryDict = {}
-    successCount = 0
-    errorCount = 0
-    for pId in pIdRange:
-        try:
-            entry = server.metaWeblog.getPost(pId, user, passw)
-            entryDict[entry['title']] = pId
-            logging.debug("Get post %s, title is %s", pId, entry['title'])
-            successCount += 1
-        except xmlrpclib.Fault:
-            logging.debug("No post of id %s", pId)
-        except xml.parsers.expat.ExpatError:
-            logging.warn("Failed to retrieve Post with id %d", pId)
-            errorCount += 1
-    logging.info('Get %d posts successfully. %d posts failed. Check warning log to see details', successCount, errorCount)
-    return entryDict
+    if not needPermaLink :
+        blogInfo["permaLink"] = url
+        return blogInfo
     
-def publishPost(server, blogid, user, passw, wpost, published):
-    i = 1
-    while i < 6:
-        try:
-            logging.debug("publishing post on new weblog (account:%s); try:%d)...", user, i)
-            return server.metaWeblog.newPost(blogid, user, passw, wpost, published)
-        except:
-            logging.debug("error. Retrying...")
-            time.sleep(3 + i)
-            i += 1
-
-def find1stPermalink(srcURL):
-    logging.info("connectiong to source blog %s", srcURL)
-    req = urllib2.Request(srcURL, headers=userAgent)
-    page = urllib2.urlopen(req)
-    logging.info("connect successfully, look for 1st Permalink")
-    soup = BeautifulSoup(page)
-    print csdnCommentsPre
     linkNode = soup.find(attrs={"class":"link_title"}).find('a')
     if linkNode :
-        #Update @ 2007-10-21
-        #if the permalink is like "/davelv/article/details/6191987" concat after "http://blog.csdn.net"
-        linkNodeHref = csdnHost + linkNode["href"][1:]
-    
-        logging.info("Found 1st Permalink %s", linkNodeHref)
-        return linkNodeHref;
+        #if the linkNode is like "/davelv/article/details/6191987" concat after "http://blog.csdn.net/"
+        blogInfo["permaLink"] = linkNode["href"]
     else :
-        logging.error("Can't find 1st Permalink")
-        return False
-    
-def publishComments(entry, postCommentsURL, pID=0, dstBlogEntryDict={}):
-    if len(entry['comments']) > 0 :
-        logging.debug('Try to publish comments for post %s', entry['title'])
-        if not pID:
-            if dstBlogEntryDict.has_key(entry['title']):
-                pID = dstBlogEntryDict[entry['title']]
-            else:
-                logging.warn("No pID provided, and can't find this post title in dest blog entries dict")
-                return
-        for c in entry['comments']:
-            c["comment_post_ID"] = pID
-            data = urllib.urlencode(c)
-            f = urllib.urlopen(postCommentsURL, data)
-            s = f.read()
-            if s == 'Success' : logging.debug('Post comment successfully')
-            else : logging.debug('Post comment failed')
-            f.close()
+        logging.error("Can't find permaLink")
+    return blogInfo 
             
-def exportHead(f, dic, categories=[]):
+def ExportHead(f, dic, categories=[]):
     t = Template(u"""<?xml version="1.0" encoding="UTF-8"?>
 <!--
     This is a WordPress eXtended RSS file generated by Live Space Mover as an export of 
@@ -297,10 +261,11 @@ def exportHead(f, dic, categories=[]):
 
 <!-- generator="{programInfo}" created="${nowTime}"-->
 <rss version="2.0"
+    xmlns:excerpt="http://wordpress.org/export/1.1/excerpt/"
     xmlns:content="http://purl.org/rss/1.0/modules/content/"
     xmlns:wfw="http://wellformedweb.org/CommentAPI/"
     xmlns:dc="http://purl.org/dc/elements/1.1/"
-    xmlns:wp="http://wordpress.org/export/1.0/"
+    xmlns:wp="http://wordpress.org/export/1.1/"
 >
 
 <channel>
@@ -330,7 +295,7 @@ def exportHead(f, dic, categories=[]):
     f.write(t.substitute(dic))
     f.write(catStr)
  
-def exportEntry(f, entry, user):
+def ExportEntry(f, entry, user):
     commentT = Template(u"""
         <wp:comment>
             <wp:comment_id>${commentId}</wp:comment_id>
@@ -365,8 +330,12 @@ def exportEntry(f, entry, user):
         <wp:post_parent>0</wp:post_parent>
         <wp:menu_order>0</wp:menu_order>
         <wp:post_type>post</wp:post_type>
+        <wp:postmeta>
+            <wp:meta_key>views</wp:meta_key>
+            <wp:meta_value><![CDATA[${views}]]></wp:meta_value>
+        </wp:postmeta>
         ${comments}
-    </item>""") #need entryTitle, entryURL, entryAuthor, category, entryContent, entryId, postDate, pubDate
+    </item>""") #need entryTitle, entryURL, entryAuthor, category, entryContent, entryId, postDate,postDateGMT, pubDate,views
     cateT = Template(u"""
         <category domain="category" nicename="${niceName}"><![CDATA[${category}]]></category>
         <category domain="post_tag" nicename="${niceName}"><![CDATA[${category}]]></category>""")#nedd category niceName
@@ -377,11 +346,11 @@ def exportEntry(f, entry, user):
         commentsStr += commentT.substitute(
         commentId=comment['CommentId'],
             commentAuthor=saxutils.escape(comment['UserName']),
-            authorURL=csdnHost + saxutils.escape(comment['UserName']),
+            authorURL=u'http://'+csdnHost + u'/' + saxutils.escape(comment['UserName']),
             commentDate=comment['PostTime'].strftime('%Y-%m-%d %H:%M:%S'),
-        commentDateGMT=(comment['PostTime'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
+            commentDateGMT=(comment['PostTime'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
             commentContent=comment['Content'],
-        parentId=comment['ParentId'])
+            parentId=comment['ParentId'])
         #logging.debug(comment['comment'])
     #category
     categoryStr = u''
@@ -395,175 +364,104 @@ def exportEntry(f, entry, user):
         entryURL='',
         entryAuthor=user,
         entryContent=entry['content'],
-    postName=urllib2.quote(entry['title'].encode('utf-8')),
+        postName=urllib2.quote(entry['title'].encode('utf-8')),
         entryId=entry['id'],
         postDate=entry['date'].strftime('%Y-%m-%d %H:%M:%S'),
         postDateGMT=(entry['date'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
         pubDate=entry['date'].strftime('%a, %d %b %Y %H:%M:%S +0800'),
+        views=entry['views'],
         comments=commentsStr,
-    categories=categoryStr)
+        categories=categoryStr)
     #logging.debug(itemStr)
     f.write(itemStr)
     
-def exportFoot(f):
+def ExportFoot(f):
     f.write("""
 </channel>
 </rss>
 """)
     f.close()
-    
+
+def LoadCache(fileName = 'entries.cache'):
+    entries = []
+    if not os.path.exists(fileName):
+        return entries
+    logging.info('Found cache file')
+    cacheFile = open(fileName, 'r')
+    try:
+        while True:
+            entry = pickle.load(cacheFile)
+            categories.update(entry['category'] )
+            logging.info('Load entry from cache file with title %s', entry['title'])
+            entries.append(entry) 
+    except (pickle.PickleError, EOFError):
+        logging.info("No more entries in cache file for loading")
+    finally:
+        cacheFile.close()       
+    return entries
 def main():
     #main procedure begin
     parser = OptionParser()
-    parser.add_option("-s", "--source", action="store", type="string", dest="srcURL", help="source msn/live space address")
-    parser.add_option("-f", "--startfrom", action="store", type="string", dest="startfromURL", help="a permalink in source msn/live space address for starting with, if this is specified, srcURL will be ignored.")    
-    parser.add_option("-d", "--dest", action="store", type="string", dest="destURL", help="destination wordpress blog address (must point to xmlrpc.php). If this isn't provided, only export xml")
-    parser.add_option("-u", "--user", action="store", type="string", dest="user", default="yourusername", help="username for logging into destination wordpress blog")
-    parser.add_option("-p", "--password", action="store", type="string", dest="passw", default="yourpassword", help="password for logging into destination wordpress blog")
-    parser.add_option("-x", "--proxy", action="store", type="string", dest="proxy", help="http proxy server, only for connecting live space.I don't know how to add proxy for metaWeblog yet. So this option is probably not useful...")
-    parser.add_option("-t", "--datetimepattern", action="store", dest="datetimepattern", default="%Y-%m-%d %H:%M", help="The datetime pattern of livespace, default to be %Y/%m/%d %H:%M. Check http://docs.python.org/lib/module-time.html for time formatting codes. Make sure to quote the value in command line.")
-    parser.add_option("-b", "--draft", action="store_false", dest="draft", default=True, help="as published posts or drafts after transfering,default to be published directly")
+    parser.add_option("-s", "--source", action="store", type="string", dest="srcURL", help="source csdn blog address")
+    parser.add_option("-b", "--begin", action="store", type="string", dest="beginURL", help="a permalink in source csdn blog address for starting with, if this is specified, source url will be ignored.")    
     parser.add_option("-l", "--limit", action="store", type="int", dest="limit", help="limit number of transfered posts, you can use this option to test")
-    parser.add_option("-m", "--mode", action="store", type="string", dest="mode", default="all", help="Working mode, 'all' or 'commentsOnly'. Default is 'all'. Set it to 'commentsOnly' if you have used earlier version of this script to move posts. Set it to 'postsOnly' if you can't upload the comments-post page to your dest WordPress blog so can't move comments")
-    parser.add_option("-c", "--postcommentsurl", action="store", type="string", default='', dest="postCommentsURL", help="The URL for posting comments, usually should be the URL of 'my-wp-comments-post.php' provided with this script. If this option isn't set, program will use destURL and the default page name to decide.")    
-    parser.add_option("-a", "--maxDstEntryID", action="store", type="int", default='100', dest="maxDstEntryID", help="Use this parameter to specify the MAX post id of your destination blog")    
+    parser.add_option("-o", "--postonly", action="store_true", dest="postOnly", default=False, help="if postonly setted, program will only post without comments, default is False")
     (options, args) = parser.parse_args()
     
     
     #export all options variables
     for i in dir(options):
-        exec i + " = options." + i
-    #decide postCommentsURL
-    if destURL:
-        if len(postCommentsURL) == 0:
-            postCommentsURL = destURL.rsplit('/', 1)[0] + '/my-wp-comments-post.php'
-            logging.info('Set postCommentsURL to %s', postCommentsURL)
-    #add proxy
-    if proxy:
-        proxy_handler = urllib2.ProxyHandler({'http': proxy})
-        opener = urllib2.build_opener(proxy_handler)
-        urllib2.install_opener(opener)
-        logging.info("Set proxy to %s", proxy)
-    #test username/password and desturl valid
-    if destURL:
-        logging.debug('Test destination blog address %s', destURL)
-        server = xmlrpclib.ServerProxy(destURL, verbose=0)
-        blogid = int(1)
-        try:
-            server.metaWeblog.getUsersBlogs(blogid, user, passw)
-            logging.info('Connect to dest blog successfully')
-        except xmlrpclib.ProtocolError, xmlrpclib.ResponseError:
-            logging.error("Error while checking username %s. Possible reasons are:", user)
-            logging.error(" - The weblog doesn't exist")
-            logging.error(" - Path to xmlrpc server is incorrect")
-            logging.error("Check for typos.")
-            sys.exit(2)
-        except xmlrpclib.Fault:
-            logging.error("Error while checking username %s. Possible reasons are:", user)
-            logging.error(" - your weblog doesn't support the MetaWeblog API")
-            logging.error(" - your weblog doesn't like the username/password combination you've provided.")
-            sys.exit(2)
-    #Load or Fetch dst blog entries dict (title and id)
-    if destURL and mode == 'commentsOnly':
-        logging.info('Comments Only mode, try to get a dict of dest blog entries')
-        loadedDump = False
-        if os.path.exists('DstEntryDict.dump') :
-            try :
-                f = open('DstEntryDict.dump')
-                dstBlogEntryDict = pickle.load(f)
-                f.close()
-                loadedDump = True
-                logging.info('Finished Loading Destination Blog Entries from local cache')
-            except Exception:
-                logging.info('Loading DstEntryDict.dump failed, begin to fetch')
-                loadedDump = False
-        if not loadedDump :
-            f = open('DstEntryDict.dump', 'w')
-            dstBlogEntryDict = getDstBlogEntryList(server, user, passw, maxDstEntryID)
-            pickle.dump(dstBlogEntryDict, f)
-            f.close()
-            logging.info('Finished Fetching Destination Blog Entries from site, and saved to local for caching')
-    global entries
+        exec '' + i + " = options." + i
+
     global categories
-    cacheFile = None
-    #If there is a cache file, load it and resume from the last post in it
-    if not startfromURL and os.path.exists('entries.cache'):
-        logging.info('Found cache file')
-        cacheFile = open('entries.cache', 'r')
-        try:
-            while True:
-                entry = pickle.load(cacheFile)
-                logging.info('Load entry from cache file with title %s', entry['title'])
-                entries.append(entry)
-        except (pickle.PickleError, EOFError):
-            logging.info("No more entries in cache file for loading")
-            cacheFile.close()
-            cacheFile = open('entries.cache', 'a+')
-        if len(entries) > 0:
-            startfromURL = entries[-1]['permalLink']
-            logging.info("Will start fetching from %s", startfromURL)
-    #connect src blog and find first permal link
-    srcURL = "http://blog.csdn.net/davelv"
-    if startfromURL :
-        permalink = startfromURL
-        logging.info('Start fetching from %s', startfromURL)
+    #load cache and resume from the last post in it
+    cacheName = 'entries.cache'
+    entries = LoadCache(cacheName)
+    
+    #find blog info
+    if beginURL :
+        blogInfo = FetchBlogInfo(beginURL, False)
+        logging.info('Start fetching from %s', beginURL)
     elif srcURL:
-        permalink = find1stPermalink(srcURL)
+        blogInfo = FetchBlogInfo(srcURL, True)
+        logging.info("Found permaLink %s", blogInfo["permaLink"])
     else:
-        logging.error("Error, you must give either srcURL or startfromURL")
+        logging.error("Error, you must give either srcURL or beginURL")
         sys.exit(2)
-    global csdnCommentsPre 
-    csdnCommentsPre = re.search("http://blog\.csdn\.net/[^/]+", permalink).group(0) + "/comment/list/"
+    
     #main loop, retrieve every blog entry and post to dest blog
     count = 0
-    if not cacheFile:
-        cacheFile = open('entries.cache', 'w')
+    cacheFile = open(cacheName, 'a')
+    if len(entries) >0:
+        permaLink = entries[-1]['prevLink']
+    else :
+        permaLink = blogInfo['permaLink']
     try:
-        while permalink:
-            i = fetchEntry(permalink, datetimepattern, mode)
-            if 'title' in i:
-                logging.info("Got a blog entry titled %s with %d comments successfully", i['title'], len(i['comments']))
-            if destURL:
-                wpost = {}
-                wpost['description'] = i['content']
-                wpost['title'] = i['title']
-                wpost['dateCreated'] = i['date']
-                if mode == 'all':
-                    pID = publishPost(server, blogid, user, passw, wpost, draft)
-                    publishComments(entry=i, pID=pID, postCommentsURL=postCommentsURL)
-                elif mode == 'postsOnly':
-                    publishPost(server, blogid, user, passw, wpost, draft)
-                else : #mode='commentsOnly'
-                    publishComments(entry=i, dstBlogEntryDict=dstBlogEntryDict, postCommentsURL=postCommentsURL)
-                    
-            entries.append(i)
-            #pickle.dump(i,cacheFile)
+        while permaLink:
+            item = FetchEntry(permaLink, postOnly=postOnly)
+            #
+            tt=item['title']
+            i=1
+            for e in entries : 
+                if e['title'] == item['title']: 
+                    item['title']=tt + str(i)
+                    i += 1
+                    break
+            logging.info("Got a blog entry titled %s with %d comments successfully", item['title'], len(item['comments']))
+            entries.append(item)
+            pickle.dump(item,cacheFile)
+            cacheFile.flush()
             logging.debug("-----------------------")
-            if 'prevLink' in i :
-                permalink = i['prevLink']
+            if 'prevLink' in item :
+                permaLink = item['prevLink']
             else :
                 break
             count += 1
-            limit = 10
             if limit and count >= limit : break
     finally:
         cacheFile.close()
-    #get blog info and export header
-    blogInfoDic = {}
-    if srcURL:
-        blogInfoDic['blogURL'] = srcURL
-    elif startfromURL:
-        blogInfoDic['blogURL'] = startfromURL.split('com/', 1)[0] + 'com/'
-    else:
-        logging.error("Error, you must give either srcURL or startfromURL")
-        sys.exit(2)
-    logging.info('Blog URL is %s', blogInfoDic['blogURL'])
-    blogInfoDic['nowTime'] = datetime.now().strftime('%a, %d %b %Y %H:%M:%S +0800')
-    page = urllib2.urlopen(urllib2.Request(blogInfoDic['blogURL'], headers=userAgent));
-    soup = BeautifulSoup(page)
-    blogInfoDic['blogTitle'] = u'' + soup.find(id='blog_title').h1.text
-    blogInfoDic['blogDesc'] = u'' + soup.find(id='blog_title').h2.text
-    logging.debug('Blog Title is %s', blogInfoDic['blogTitle'])
+    #export header
+
     exportFileName = 'export_' + datetime.now().strftime('%m%d%Y-%H%M') + '.xml'
     f = codecs.open(exportFileName, 'w', 'utf-8')
     if f:
@@ -571,17 +469,16 @@ def main():
     else:
         logging.error("Can't open export file %s for writing", exportFileName)
         sys.exit(2)
-    exportHead(f, blogInfoDic, categories)
+    ExportHead(f, blogInfo, categories)
     logging.debug('Exported header')
-    user = u'davelv';
     #export entries
     for entry in entries:
-        exportEntry(f, entry, user)
+        ExportEntry(f, entry, blogInfo['user'])
     #export Foot
-    exportFoot(f)
+    ExportFoot(f)
     logging.debug('Exported footer')
     #Delete cache file
-    os.remove('entries.cache')
+    os.remove(cacheName)
     logging.info("Deleted cache file")
     logging.info("Finished! Congratulations!")
 
@@ -589,7 +486,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
         format='LINE %(lineno)-4d  %(levelname)-8s %(message)s',
         datefmt='%m-%d %H:%M',
-        filename='blog_mover.log',
+        filename='blog-mover.log',
         filemode='w');
     # define a Handler which writes INFO messages or higher to the sys.stderr
     console = logging.StreamHandler()
@@ -601,8 +498,9 @@ if __name__ == "__main__":
     logging.getLogger('').addHandler(console)
     try:
         main()
+    except SystemExit:
+        pass
     except:
         logging.exception("Unexpected error")
         raise
-
 
