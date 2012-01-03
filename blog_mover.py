@@ -10,7 +10,7 @@ Thanks for ordinary author Wei Wei(live space mover)
 (C) Davelv, homepage http://www.davelv.net
 (C) Wei Wei,homepage: http://www.broom9.com
 General Public License: http://www.gnu.org/copyleft/gpl.html
-Last modified 2012-01-02 08:21
+Last modified 2012-01-03 06:21
 """
 
 __VERSION__ = "1.0"
@@ -31,9 +31,22 @@ import pickle
 from xml.sax import saxutils
 import json
 
+class IDGenerator:
+    start = 0
+    current = 0
+    dict={0:0}
+    def __init__(self, start):
+        self.start = start
+        self.current = start
+    def GetID(self, key):
+        if not self.dict.has_key(key):
+            self.dict[key] = self.current
+            self.current +=1
+        return self.dict[key]
+    
 commentIdList = {}
-categories = set([])
-
+postIDGenerator = ''
+commentIDGenerator = ''
 csdnDatetimePattern = u'%Y-%m-%d %H:%M';
 csdnHost = u'blog.csdn.net'
 csdnCommentsPre = u''
@@ -58,15 +71,52 @@ def GetPage(url, retryTimes=5, retryIntvl=3):
             if retryTimes == 0:
                 raise
             time.sleep(retryIntvl)
+#
+#def ConvertID(array, priority='id', start=0):
+#    array.sort(cmp=None, key=None, reverse=False)
+#    if start < 0:
+#        start =0;
+#    for item in array: 
+#        item[priority] = start
+#        start +=1
+#         
+#    return 
 
-        
+    
+def CheckAttachmentURL(url , attachEntrys): 
+    for ae in attachEntrys:
+        if url ==  ae['url'] :return False
+    return True
+
+def ProcessAttachment(articleEntry, attachEntries=[]):
+    attachRe = re.compile(u'http://hi.csdn.net/attachment/[^"]+')
+    attachurls = attachRe.findall(articleEntry['content'])
+    for attachurl in attachurls:
+        if not CheckAttachmentURL(attachurl,attachEntries):
+            continue
+        attachEntry = {}
+        attachEntry['title'] = attachurl.split(u'/')[-1]
+        attachEntry['date'] = articleEntry['date']
+        attachEntry['url'] = attachurl
+        attachEntry['parentId'] = articleEntry['id']
+        attachEntry['id'] = postIDGenerator.GetID(attachurl)
+        attachEntry['metaKey'] = u"_wp_attached_file"
+        attachEntry['metaValue']=attachEntry['title']
+        attachEntry['status']=u"inherit"
+        attachEntry['type']=u"attachment"
+        attachEntry['content']=attachEntry['comments']=attachEntry['category']=u''
+        attachEntries.append(attachEntry)  
+    
+    return         
+
 def PrettyCode(content):
     """
     Pretty code area in article content use pre to replace textarea
+    surpport SyntaxHighlighter 
     working...
     """
     textarea = re.compile(u'<textarea.+?name="code".+?class="([^"]+)">(.+?)</textarea>', re.S)
-    return  textarea.sub(u'<pre class="\g<1>">\g<2></pre>', content)
+    return  textarea.sub(u'<pre class="brush: \g<1>">\g<2></pre>', content)
 def PrettyComment(comment):
     quote = re.compile(u'^\[quote=([^\]]+)\](.+)\[/quote\]', re.S)
     comment = quote.sub(u'<fieldset><legend>引用 \g<1>:</legend>\g<2></fieldset>', comment)
@@ -99,7 +149,7 @@ def ParseCommentDate(dateStr):
     if m :
       return v(m)
 
-def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
+def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', isPostOnly=False):
     """
     Structure of entry
     entry
@@ -121,7 +171,8 @@ def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
     articleID = temp[-1]
     logging.debug("Fetch article page from %s",url)
     soup = BeautifulSoup(GetPage(url))    #logging.debug("Got Page Content\n---------------\n%s",soup.prettify())
-    item = {'title':'', 'date':'', 'views':'', 'content':'', 'category':[], 'prevLink':'', 'id':articleID, 'comments':[]}
+    item = {'title':'', 'date':'', 'content':'', 'category':[], 'prevLink':'', 'id':int(articleID), 'comments':[],
+            'parentId':0, 'type':u'post', 'status':u'publish', 'metaKey':u'views', 'metaValue':0}
     #find article
     article = soup.find(id="article_details")
     if article :
@@ -146,15 +197,14 @@ def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
        categoryStr = u''
        for cate in item['category'] : categoryStr+=cate+u', '
        logging.debug("Found category %s",categoryStr[:-2])
-       global categories
-       categories.update(item['category'])
+       #global categories
+       #categories.update(item['category'])
     else:
         logging.debug("No category, use default")
     #date
     temp = manage.find(attrs={"class":"link_postdate"})
     if temp :
-        item['date'] = u'' + temp.contents[0].string
-        item['date'] = datetime.strptime(item['date'], datetimePattern)
+        item['date'] = datetime.strptime(u''+temp.contents[0].string, datetimePattern)
         logging.debug("Found date %s", item['date'])
     else :
         logging.warning("Can't find date")
@@ -162,8 +212,8 @@ def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
     #views
     temp = manage.find(attrs={"class":"link_view"})
     if temp :
-        item['views'] = int (temp.contents[0][0:-3])
-        logging.debug("Found views count %d", item['views'])
+        item['metaValue'] = int (temp.contents[0][0:-3])
+        logging.debug("Found views count %d", item['metaValue'] )
     else :
         logging.warning("Can't find views count")
         sys.exit(2)
@@ -179,7 +229,7 @@ def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
     #content
     temp = article.find(id="article_content") or article.find(attrs={"class":"article_content"})
     if temp :
-        item['content'] = PrettyCode(u''.join(map(unicode, temp.contents)))
+        item['content'] = u''.join(map(unicode, temp.contents))
         logging.debug("Found content");
     else:
         logging.warning("Can't find content")
@@ -190,7 +240,7 @@ def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
         item['prevLink'] = u'' + temp.find('a')['href']
         logging.debug("Found previous permaLink %s", item['prevLink'])
     #comments get from server
-    if postOnly or comments_cnt == 0:
+    if isPostOnly or comments_cnt == 0:
         return item
     commentsURL = csdnCommentsPre + articleID
     logging.debug("Fetch comments from %s", commentsURL)
@@ -199,15 +249,12 @@ def FetchEntry(url, datetimePattern='%Y-%m-%d %H:%M', postOnly=False):
     #I found it can be solved by json ulity in one line!!! 
     #{"list":[{"ArticleId":7079224,"BlogId":66847,"CommentId":2065153,"Content":"XXXX","ParentId":0,"PostTime":"昨天 11:26","Replies":null,"UserName":"evilhacker","Userface":"http://xxx.jpg"},...],...}
     item['comments'] = json.load(page)['list']
-
-
     if item['comments'] == None:
         logging.warning("Can't find conments")
     for v in item['comments']:
         uselessPriorities = ['ArticleId','BlogId','Replies', 'Userface']
         for i in uselessPriorities: del v[i]
         v['PostTime'] = ParseCommentDate(v['PostTime'])
-        v['Content'] = PrettyComment(v['Content'])
         
     return item
 
@@ -240,7 +287,7 @@ def FetchBlogInfo(url ,needPermaLink = True):
 def ExportHead(f, dic, categories=[]):
     t = Template(u"""<?xml version="1.0" encoding="UTF-8"?>
 <!--
-    This is a WordPress eXtended RSS file generated by Live Space Mover as an export of 
+    This is a WordPress eXtended RSS file generated by Csdn Blog Mover as an export of 
     your blog. It contains information about your blog's posts, comments, and 
     categories. You may use this file to transfer that content from one site to 
     another. This file is not intended to serve as a complete backup of your 
@@ -294,8 +341,8 @@ def ExportHead(f, dic, categories=[]):
     dic['programInfo'] = u'' + __PROGRAM__ + __VERSION__
     f.write(t.substitute(dic))
     f.write(catStr)
- 
-def ExportEntry(f, entry, user):
+
+def GenerateComments(comments):
     commentT = Template(u"""
         <wp:comment>
             <wp:comment_id>${commentId}</wp:comment_id>
@@ -310,39 +357,9 @@ def ExportEntry(f, entry, user):
             <wp:comment_type></wp:comment_type>
             <wp:comment_parent>${parentId}</wp:comment_parent>
         </wp:comment>""") #need commentId, commentAuthor, commentEmail, commentURL,commentDate,commentContent
-    itemT = Template(u"""
-    <item>
-        <title>${entryTitle}</title>
-        <link>${entryURL}</link>
-        <pubDate>${pubDate}</pubDate>
-        <dc:creator>${entryAuthor}</dc:creator>
-        ${categories}
-        <guid isPermaLink="false"></guid>
-        <description></description>
-        <content:encoded><![CDATA[${entryContent}]]></content:encoded>
-        <wp:post_id>${entryId}</wp:post_id>
-        <wp:post_date>${postDate}</wp:post_date>
-        <wp:post_date_gmt>${postDateGMT}</wp:post_date_gmt>
-        <wp:comment_status>open</wp:comment_status>
-        <wp:ping_status>open</wp:ping_status>
-        <wp:post_name>${postName}</wp:post_name>
-        <wp:status>publish</wp:status>
-        <wp:post_parent>0</wp:post_parent>
-        <wp:menu_order>0</wp:menu_order>
-        <wp:post_type>post</wp:post_type>
-        <wp:postmeta>
-            <wp:meta_key>views</wp:meta_key>
-            <wp:meta_value><![CDATA[${views}]]></wp:meta_value>
-        </wp:postmeta>
-        ${comments}
-    </item>""") #need entryTitle, entryURL, entryAuthor, category, entryContent, entryId, postDate,postDateGMT, pubDate,views
-    cateT = Template(u"""
-        <category domain="category" nicename="${niceName}"><![CDATA[${category}]]></category>
-        <category domain="post_tag" nicename="${niceName}"><![CDATA[${category}]]></category>""")#nedd category niceName
-
     commentsStr = u""
     #logging.debug(entry)
-    for comment in entry['comments']:
+    for comment in comments:
         commentsStr += commentT.substitute(
         commentId=comment['CommentId'],
             commentAuthor=saxutils.escape(comment['UserName']),
@@ -352,26 +369,76 @@ def ExportEntry(f, entry, user):
             commentContent=comment['Content'],
             parentId=comment['ParentId'])
         #logging.debug(comment['comment'])
+    return commentsStr
+
+def GeneratePostCategories(categories):
+    cateT = Template(u"""
+        <category domain="category" nicename="${niceName}"><![CDATA[${category}]]></category>
+        <category domain="post_tag" nicename="${niceName}"><![CDATA[${category}]]></category>""")#nedd category niceName
     #category
     categoryStr = u''
-    for cate in entry['category'] :
+    for cate in categories :
         categoryStr += cateT.substitute(
             category=cate,
         niceName=urllib2.quote(cate.encode('utf-8')))
+    return categoryStr
+
+def GenerateMeta(key, value):
+    metaT = Template(u"""
+            <wp:meta_key>${metaKey}</wp:meta_key>
+            <wp:meta_value><![CDATA[${metaValue}]]></wp:meta_value>
+	""")
+    metaStr = metaT.substitute(metaKey=key, metaValue=value)
+    return metaStr
+
+def GenerateAttatchmentURL(url):
+    return u"\n        <wp:attachment_url>"+url+u"</wp:attachment_url>"
+        
+def ExportEntry(f, entry, user):
+        
+    itemT = Template(u"""
+    <item>
+        <title>${entryTitle}</title>
+        <link>${entryURL}</link>
+        <pubDate>${pubDate}</pubDate>
+        <dc:creator>${entryAuthor}</dc:creator>${categories}
+        <guid isPermaLink="false"></guid>
+        <description></description>
+        <content:encoded><![CDATA[${entryContent}]]></content:encoded>
+        <wp:post_id>${entryId}</wp:post_id>
+        <wp:post_date>${postDate}</wp:post_date>
+        <wp:post_date_gmt>${postDateGMT}</wp:post_date_gmt>
+        <wp:comment_status>open</wp:comment_status>
+        <wp:ping_status>open</wp:ping_status>
+        <wp:post_name>${postName}</wp:post_name>
+        <wp:status>${status}</wp:status>
+        <wp:post_parent>${parentId}</wp:post_parent>
+        <wp:menu_order>0</wp:menu_order>
+        <wp:post_type>${type}</wp:post_type>${attachmentURL}
+        <wp:postmeta>${postMeta}</wp:postmeta>${comments}
+    </item>""") #need entryTitle, entryURL, entryAuthor, category, entryContent, entryId, postDate,postDateGMT, pubDate,views
+
     #logging.debug(entry['category'])
+    
     itemStr = itemT.substitute(
-    entryTitle=saxutils.escape(entry['title']),
         entryURL='',
         entryAuthor=user,
-        entryContent=entry['content'],
-        postName=urllib2.quote(entry['title'].encode('utf-8')),
         entryId=entry['id'],
+        entryContent=entry['content'],
+        status = entry['status'],
+        parentId = entry['parentId'],
+        type = entry['type'],
+        entryTitle=saxutils.escape(entry['title']),
+        postName=urllib2.quote(entry['title'].encode('utf-8')),
         postDate=entry['date'].strftime('%Y-%m-%d %H:%M:%S'),
-        postDateGMT=(entry['date'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),
         pubDate=entry['date'].strftime('%a, %d %b %Y %H:%M:%S +0800'),
-        views=entry['views'],
-        comments=commentsStr,
-        categories=categoryStr)
+        postDateGMT=(entry['date'] - timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S'),       
+        comments=GenerateComments(entry['comments']),
+        categories=GeneratePostCategories(entry['category']),
+        postMeta=GenerateMeta(entry['metaKey'], entry['metaValue']),
+        attachmentURL = u'' if not entry.has_key('url') else GenerateAttatchmentURL(entry['url'])
+        )
+    
     #logging.debug(itemStr)
     f.write(itemStr)
     
@@ -391,7 +458,6 @@ def LoadCache(fileName = 'entries.cache'):
     try:
         while True:
             entry = pickle.load(cacheFile)
-            categories.update(entry['category'] )
             logging.info('Load entry from cache file with title %s', entry['title'])
             entries.append(entry) 
     except (pickle.PickleError, EOFError):
@@ -399,21 +465,78 @@ def LoadCache(fileName = 'entries.cache'):
     finally:
         cacheFile.close()       
     return entries
+def LoopFetchEntry(catchFileName, permaLink ,isPostOnly=False, limit=0):
+    count = 0
+    entries = []
+    cacheFile = open(catchFileName, 'a')
+    try:
+        while permaLink:
+            item = FetchEntry(permaLink, isPostOnly=isPostOnly)
+            logging.info("Got a blog entry titled %s with %d comments successfully", item['title'], len(item['comments']))
+            entries.append(item)
+            pickle.dump(item,cacheFile)
+            cacheFile.flush()
+            logging.debug("-----------------------")
+            if 'prevLink' in item :
+                permaLink = item['prevLink']
+            else :
+                break
+            count += 1
+            if limit!=0 and count >= limit : break
+    finally:
+        cacheFile.close()
+    return entries
+
+def ArrangeEntries(entries, isPretty=True, isAttach=True):
+    """
+    entries to postEntries, attachmentEntries, categories
+    """
+    logging.info("Arrange entries")
+    categories = set([])
+    attachEntries =[]
+    entries.sort(key=lambda e:e['id'])
+    #sort entries
+    for en in entries:
+        #genearte new article id
+        en['id']=postIDGenerator.GetID(en['id'])
+        #category
+        categories.update(en['category'])
+        #pretty code and comment
+        if isPretty:
+            en['content'] = PrettyCode(en['content'])
+            for co in en['comments']: co['Content']=PrettyComment(co['Content'])
+        #new comment id
+        en['comments'].sort(key=lambda e:e['CommentId'])
+        for co in en['comments']:
+            co['CommentId'] = commentIDGenerator.GetID(co['CommentId'])
+            co['ParentId'] =  commentIDGenerator.GetID(co['ParentId'])
+        #attachment
+        if isAttach:
+            ProcessAttachment(en,attachEntries)
+    logging.info("Arrange done")
+    return entries, attachEntries, categories
+
 def main():
     #main procedure begin
     parser = OptionParser()
     parser.add_option("-s", "--source", action="store", type="string", dest="srcURL", help="source csdn blog address")
     parser.add_option("-b", "--begin", action="store", type="string", dest="beginURL", help="a permalink in source csdn blog address for starting with, if this is specified, source url will be ignored.")    
-    parser.add_option("-l", "--limit", action="store", type="int", dest="limit", help="limit number of transfered posts, you can use this option to test")
-    parser.add_option("-o", "--postonly", action="store_true", dest="postOnly", default=False, help="if postonly setted, program will only post without comments, default is False")
+    parser.add_option("-l", "--limit", action="store", type="int", dest="limit", default=0,help="limit number of transfered posts, you can use this option to test")
+    parser.add_option("-o", "--postonly", action="store_true", dest="isPostOnly", default=False, help="if option setted, program will  post articles without comments")
+    parser.add_option("-a", "--noattach", action="store_false", dest="isAttach", default=True, help="if option setted, program will not copy attachment from csdn to wordpress(you may less use it because these attachments don't support  external link)")
+    parser.add_option("-i", "--idstart", action="store",type="int", dest="startId", default=10, help="the started post/comment id ,default is 10")
+
     (options, args) = parser.parse_args()
     
     
     #export all options variables
     for i in dir(options):
         exec '' + i + " = options." + i
-
-    global categories
+    #DI generate
+    global postIDGenerator
+    postIDGenerator = IDGenerator(startId)
+    global commentIDGenerator
+    commentIDGenerator = IDGenerator(startId)
     #load cache and resume from the last post in it
     cacheName = 'entries.cache'
     entries = LoadCache(cacheName)
@@ -428,38 +551,14 @@ def main():
     else:
         logging.error("Error, you must give either srcURL or beginURL")
         sys.exit(2)
-    
-    #main loop, retrieve every blog entry and post to dest blog
-    count = 0
-    cacheFile = open(cacheName, 'a')
     if len(entries) >0:
         permaLink = entries[-1]['prevLink']
     else :
         permaLink = blogInfo['permaLink']
-    try:
-        while permaLink:
-            item = FetchEntry(permaLink, postOnly=postOnly)
-            #
-            tt=item['title']
-            i=1
-            for e in entries : 
-                if e['title'] == item['title']: 
-                    item['title']=tt + str(i)
-                    i += 1
-                    break
-            logging.info("Got a blog entry titled %s with %d comments successfully", item['title'], len(item['comments']))
-            entries.append(item)
-            pickle.dump(item,cacheFile)
-            cacheFile.flush()
-            logging.debug("-----------------------")
-            if 'prevLink' in item :
-                permaLink = item['prevLink']
-            else :
-                break
-            count += 1
-            if limit and count >= limit : break
-    finally:
-        cacheFile.close()
+    #main loop, get blog data and
+    entries.extend(LoopFetchEntry(cacheName, permaLink, isPostOnly, limit))
+    #data arrangement
+    postEntries, attachEntries, categories = ArrangeEntries(entries, True, isAttach)
     #export header
 
     exportFileName = 'export_' + datetime.now().strftime('%m%d%Y-%H%M') + '.xml'
@@ -471,8 +570,11 @@ def main():
         sys.exit(2)
     ExportHead(f, blogInfo, categories)
     logging.debug('Exported header')
+    #export attachment
+    for entry in attachEntries:
+        ExportEntry(f, entry, blogInfo['user'])
     #export entries
-    for entry in entries:
+    for entry in postEntries:
         ExportEntry(f, entry, blogInfo['user'])
     #export Foot
     ExportFoot(f)
