@@ -1,1 +1,31 @@
-WORKING IN PROCESS
+CsdnBlogMover copies entries from a CSDN blog to wordpress
+It can move both posts, comments, categories(tag), attachment even code highlight.
+It's written by python and require 'BeautifulSoup' module
+Welcome to report any bug and advisement 
+Email:davelv@qq.com
+Script homepage：http://www.davelv.net/?p=321
+
+Thanks for ordinary author Wei Wei(live space mover)
+(C) Davelv, homepage http://www.davelv.net
+(C) Wei Wei,homepage: http://www.broom9.com
+Link to BeautifulSoup:http://www.crummy.com/software/BeautifulSoup/
+Link to Python: http://python.org/
+Released under the GPL: http://www.gnu.org/copyleft/gpl.html
+Last modified 2012-01-03 22:37:06 +0800
+
+=============================================================
+
+本程序是用来把CSDN的博客搬到Wordpress上去的(我的密码才没有泄漏，真的)
+它可以移动 日志，评论，分类（标签），附件，甚至还支持代码高亮
+程序是用python来写的，需要一个叫做BeautifulSoup的第三方库
+欢迎报告bug和提意见
+电子邮件：davelv@qq.com
+项目主页：http://www.davelv.net/?p=321
+
+感谢live space mover的作者Wei Wei让我有个参考和修改的程序
+我的个人主页：http://www.davelv.net
+WeiWei的主页：http://www.broom9.com
+BeautifulSoup：http://www.crummy.com/software/BeautifulSoup/
+Python：http://python.org/
+GPL授权发布：http://www.gnu.org/copyleft/gpl.html
+最后修改 2012-01-03 22:37:06 +0800
