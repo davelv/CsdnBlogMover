@@ -10,7 +10,7 @@ Thanks for ordinary author Wei Wei(live space mover)
 (C) Davelv, homepage http://www.davelv.net
 (C) Wei Wei,homepage: http://www.broom9.com
 General Public License: http://www.gnu.org/copyleft/gpl.html
-Last modified 2012-01-03 22:37:06 +0800
+Last modified 2012-01-03 06:21
 """
 
 __VERSION__ = "1.0"
@@ -71,16 +71,6 @@ def GetPage(url, retryTimes=5, retryIntvl=3):
             if retryTimes == 0:
                 raise
             time.sleep(retryIntvl)
-#
-#def ConvertID(array, priority='id', start=0):
-#    array.sort(cmp=None, key=None, reverse=False)
-#    if start < 0:
-#        start =0;
-#    for item in array: 
-#        item[priority] = start
-#        start +=1
-#         
-#    return 
 
     
 def CheckAttachmentURL(url , attachEntrys): 
@@ -558,7 +548,7 @@ def main():
     postEntries, attachEntries, categories = ArrangeEntries(entries, options.lighttype, options.isAttach)
     #export header
 
-    exportFileName = 'export_' + datetime.now().strftime('%m%d%Y-%H%M') + '.xml'
+    exportFileName = 'export_' + datetime.now().strftime('%Y%m%d-%H%M%S') + '.xml'
     f = codecs.open(exportFileName, 'w', 'utf-8')
     if f:
         logging.info('Export XML to file %s', exportFileName)
@@ -589,7 +579,7 @@ if __name__ == "__main__":
         filemode='w');
     # define a Handler which writes INFO messages or higher to the sys.stderr
     console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
+    console.setLevel(logging.INFO)
     # set a format which is simpler for console use
     formatter = logging.Formatter('LINE %(lineno)-4d : %(levelname)-8s %(message)s')
     # tell the handler to use this format
